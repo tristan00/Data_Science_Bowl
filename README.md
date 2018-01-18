@@ -17,6 +17,7 @@ look into extracting image metadata as fetures.
 vectorize feature extraction
 
 experiment with:
+    experiment with larger tf convolutional nn,
     other nan replacement,
     different input feature sizes,
     stacked models and other model types
