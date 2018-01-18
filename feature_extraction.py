@@ -39,17 +39,16 @@ def generate_input_image_and_masks():
         yield np_image, masks
 
 
-def get_features_of_point(x, y, image, masks, square_size):
+def get_features_of_point(x, y, image, image_gradient, masks, square_size):
     x_list = []
 
-    gradients = np.gradient(image)
     for i in range(x - square_size//2, x + square_size//2):
         for j in range(y - square_size // 2, y + square_size // 2):
             if i < 0 or i >= image.shape[0] or j < 0 or j >= image.shape[1]:
                 x_list.append(np.full([4,], np.nan))
             else:
                 x_list.append(image[i][j])
-    for g in gradients:
+    for g in image_gradient:
         for i in range(x - square_size // 2, x + square_size // 2):
             for j in range(y - square_size // 2, y + square_size // 2):
                 if i < 0 or i >= image.shape[0] or j < 0 or j >= image.shape[1]:
@@ -68,12 +67,19 @@ def get_features_of_point(x, y, image, masks, square_size):
 
 
 
-def create_image_features(image, masks, square_size):
+def create_image_features(image, masks, square_size, max_feature_count=5000):
     result_dicts = []
+
+    inputs = []
+    image_gradient = np.gradient(image)
 
     for i in range(image.shape[0]):
         for j in range(image.shape[1]):
-            result_dicts.append(get_features_of_point(i, j, image, masks, square_size))
+            inputs.append((i,j))
+    inputs = random.sample(inputs, max_feature_count)
+
+    for i in inputs:
+        result_dicts.append(get_features_of_point(i[0], i[1], image, image_gradient, masks, square_size))
 
     return pd.DataFrame.from_dict(result_dicts)
 
@@ -83,15 +89,13 @@ def get_model_inputs():
 
     dfs = []
 
-    for i in range(1):
+    for i in range(30):
         image, masks = gen.__next__()
-        dfs.append(create_image_features(image, masks, 10))
+        dfs.append(create_image_features(image, masks, 6))
     df = pd.concat(dfs, ignore_index=True)
-    df = df.sort_values(by='output')
     positive_matches = df[df['output'] > 0]
     negative_matches = df[df['output'] == 0]
     negative_matches = negative_matches.sample(n=positive_matches.shape[0])
-
     df = pd.concat([positive_matches, negative_matches], ignore_index=True)
 
     x, y = [], []
@@ -129,8 +133,8 @@ def train_nn_classifier(x_train, x_test, y_train, y_test, max_iter = 1000,
 
     clf = MLPClassifier(hidden_layer_sizes=nn_shape, activation=activation, max_iter=max_iter)
     clf.fit(x_train, y_train)
-    with open(name + '.plk', 'wb') as model_file:
-        pickle.dump(clf, model_file)
+    # with open(name + '.plk', 'wb') as model_file:
+    #     pickle.dump(clf, model_file)
     print('trained:', name, clf.score(x_test, y_test))
 
     test_res = clf.predict_proba(x_train)
@@ -150,8 +154,8 @@ def train_adaboost_classifier(x_train, x_test, y_train, y_test, n_estimators = 5
             print('model not found, retraining')
     clf = AdaBoostClassifier(n_estimators=n_estimators)
     clf.fit(x_train, y_train)
-    with open(name + '.plk', 'wb') as model_file:
-        pickle.dump(clf, model_file)
+    # with open(name + '.plk', 'wb') as model_file:
+    #     pickle.dump(clf, model_file)
     print('trained:', name, clf.score(x_test, y_test))
 
     test_res = clf.predict_proba(x_train)
@@ -173,8 +177,8 @@ def train_rf_classifier(x_train, x_test, y_train, y_test, n_estimators = 500,
             print('model not found, retraining')
     clf = RandomForestClassifier(n_estimators=n_estimators, max_depth=max_depth, max_features=max_features, n_jobs=-1)
     clf.fit(x_train, y_train)
-    with open(name + '.plk', 'wb') as model_file:
-        pickle.dump(clf, model_file)
+    # with open(name + '.plk', 'wb') as model_file:
+    #     pickle.dump(clf, model_file)
     print('trained:', name, clf.score(x_test, y_test))
 
     test_res = clf.predict_proba(x_train)
