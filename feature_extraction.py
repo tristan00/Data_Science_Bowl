@@ -13,31 +13,37 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler
 import pickle
 import traceback
+#from dnn import DNN
 
-
+max_images = 500
+sample_per_image = 1000
 files_loc = 'C:/Users/tdelforge/Documents/Kaggle_datasets/data_science_bowl/'
 
 def generate_input_image_and_masks():
     folders = glob.glob(files_loc + 'stage1_train/*/')
     random.shuffle(folders)
-    folders = folders[:100]
+    print(len(folders))
+    folders = folders[:max_images]
 
     for folder in folders:
-        image_location = glob.glob(folder + 'images/*')[0]
-        mask_locations = glob.glob(folder + 'masks/*')
-        image = Image.open(image_location)
-        np_image = np.array(image.getdata())
-        np_image = np_image.reshape(image.size[0], image.size[1], 4)
-        print(np_image.shape)
-        # np_image = imageio.imread(image_location)
+        try:
+            image_location = glob.glob(folder + 'images/*')[0]
+            mask_locations = glob.glob(folder + 'masks/*')
+            image = Image.open(image_location)
+            np_image = np.array(image.getdata())
+            np_image = np_image.reshape(image.size[0], image.size[1], 4)
+            print(np_image.shape)
+            # np_image = imageio.imread(image_location)
 
-        masks = []
-        for i in mask_locations:
-            mask_image = Image.open(i)
-            np_mask = np.array(mask_image.getdata())
-            np_mask = np_mask.reshape(image.size[0], image.size[1])
-            masks.append(np_mask)
-            # masks.append(imageio.imread(i))
+            masks = []
+            for i in mask_locations:
+                mask_image = Image.open(i)
+                np_mask = np.array(mask_image.getdata())
+                np_mask = np_mask.reshape(image.size[0], image.size[1])
+                masks.append(np_mask)
+                # masks.append(imageio.imread(i))
+        except OSError:
+            continue
 
         yield np_image, masks
 
@@ -68,29 +74,35 @@ def generate_input_image_and_masks():
 def get_features_of_point(x, y, image, image_gradient, masks, square_size, general_image_stats):
     x_list = []
 
+    image_list = []
+    gradient_list = []
+
     for i in range(x - square_size//2, 1 + x + square_size//2):
         for j in range(y - square_size // 2, 1 + y + square_size // 2):
             if i < 0 or i >= image.shape[0] or j < 0 or j >= image.shape[1]:
-                x_list.append(np.full([4,], np.nan))
+                image_list.append(np.full([4,], np.nan))
                 for g in image_gradient:
-                    x_list.append(np.full([4, ], np.nan))
+                    gradient_list.append(np.full([4, ], np.nan))
             else:
-                x_list.append(image[i][j])
+                image_list.append(image[i][j])
                 for g in image_gradient:
-                    x_list.append(g[i][j])
+                    gradient_list.append(g[i][j])
+    gradient_list = np.hstack(gradient_list)
+    image_list = np.hstack(image_list)
 
-    x_list = np.hstack(x_list + [general_image_stats])
+    #print(image_list.shape, gradient_list.shape, general_image_stats.shape)
+
 
     y = 0
     for i in masks:
         if i[x][y] > 0:
             y = 1
 
-    return {'output':y, 'input':x_list}
+    return {'output': y, 'image': image_list, 'gradients': gradient_list, 'general_image_stats':general_image_stats}
 
 
 
-def create_image_features(image, masks, square_size, max_feature_count=20000):
+def create_image_features(image, masks, square_size, max_feature_count=1000):
     result_dicts = []
 
     inputs = []
@@ -128,8 +140,6 @@ def create_image_features(image, masks, square_size, max_feature_count=20000):
         result_dicts.append(get_features_of_point(i[0], i[1], image, image_gradient, masks, square_size, general_image_stats))
 
     return pd.DataFrame.from_dict(result_dicts)
-
-
 
 
 def train_nn_classifier(x_train, x_test, y_train, y_test, max_iter = 1000,
@@ -177,7 +187,7 @@ def train_adaboost_classifier(x_train, x_test, y_train, y_test, n_estimators = 5
 
 
 
-def train_rf_classifier(x_train, x_test, y_train, y_test, n_estimators = 500,
+def train_rf_classifier(x_train, x_test, y_train, y_test, n_estimators = 100,
                         max_depth = None, max_features = None, name = None, retrain = True):
     if not retrain:
         try:
@@ -246,21 +256,15 @@ def get_model_inputs():
 
     dfs = []
 
-    while True:
+    for count, _ in range(max_images):
         try:
             image, masks = next(gen)
             dfs.append(create_image_features(image, masks, 10))
-        except OSError:
-            traceback.print_exc()
-        except:
+            print(count)
+        except StopIteration:
             traceback.print_exc()
             break
     df = pd.concat(dfs, ignore_index=True)
-    try:
-        pass
-        #df.to_pickle(files_loc + 'temp_input.plk')
-    except:
-        traceback.print_exc()
 
     positive_matches = df[df['output'] > 0]
     negative_matches = df[df['output'] == 0]
@@ -270,7 +274,7 @@ def get_model_inputs():
 
     x, y = [], []
     for _, i in df.iterrows():
-        x.append(i['input'])
+        x.append(np.hstack([i['image'], i['general_image_stats']]))
         y.append(i['output'])
 
     x = np.vstack(x)
@@ -290,11 +294,11 @@ def get_model_inputs():
 
 
 def train_models(x_train, x_test, y_train, y_test):
-    train_rf_classifier(x_train, x_test, y_train, y_test, name = 'RF1')
-    train_adaboost_classifier(x_train, x_test, y_train, y_test, name='ADA1')
+    #train_rf_classifier(x_train, x_test, y_train, y_test, name = 'RF1')
+    #train_adaboost_classifier(x_train, x_test, y_train, y_test, name='ADA1')
     #train_nn_classifier(x_train, x_test, y_train, y_test, name='NN1')
     train_et_classifier(x_train, x_test, y_train, y_test, name='ET1')
-    train_gb_classifier(x_train, x_test, y_train, y_test, name='GB1')
+    #train_gb_classifier(x_train, x_test, y_train, y_test, name='GB1')
 
 
 
