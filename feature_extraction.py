@@ -20,7 +20,7 @@ files_loc = 'C:/Users/tdelforge/Documents/Kaggle_datasets/data_science_bowl/'
 def generate_input_image_and_masks():
     folders = glob.glob(files_loc + 'stage1_train/*/')
     random.shuffle(folders)
-    folders = folders[:40]
+    folders = folders[:100]
 
     for folder in folders:
         image_location = glob.glob(folder + 'images/*')[0]
@@ -65,24 +65,21 @@ def generate_input_image_and_masks():
     #     yield np_image, masks
 
 
-def get_features_of_point(x, y, image, image_gradient, masks, square_size, var_array, mean_array):
+def get_features_of_point(x, y, image, image_gradient, masks, square_size, general_image_stats):
     x_list = []
 
     for i in range(x - square_size//2, 1 + x + square_size//2):
         for j in range(y - square_size // 2, 1 + y + square_size // 2):
             if i < 0 or i >= image.shape[0] or j < 0 or j >= image.shape[1]:
                 x_list.append(np.full([4,], np.nan))
+                for g in image_gradient:
+                    x_list.append(np.full([4, ], np.nan))
             else:
                 x_list.append(image[i][j])
-    for g in image_gradient:
-        for i in range(x - square_size // 2, 1 + x + square_size // 2):
-            for j in range(y - square_size // 2, 1 + y + square_size // 2):
-                if i < 0 or i >= image.shape[0] or j < 0 or j >= image.shape[1]:
-                    x_list.append(np.full([4, ], np.nan))
-                else:
+                for g in image_gradient:
                     x_list.append(g[i][j])
 
-    x_list = np.hstack(x_list + [var_array, mean_array])
+    x_list = np.hstack(x_list + [general_image_stats])
 
     y = 0
     for i in masks:
@@ -103,10 +100,23 @@ def create_image_features(image, masks, square_size, max_feature_count=20000):
                            np.mean(image[:, :, 2]),
                            np.mean(image[:, :, 3])])
     std_array = np.array([np.std(image[:, :, 0]),
-                           np.mean(image[:, :, 1]),
-                           np.mean(image[:, :, 2]),
-                           np.mean(image[:, :, 3])])
+                           np.std(image[:, :, 1]),
+                           np.std(image[:, :, 2]),
+                           np.std(image[:, :, 3])])
+    median_array = np.array([np.median(image[:, :, 0]),
+                           np.median(image[:, :, 1]),
+                           np.median(image[:, :, 2]),
+                           np.median(image[:, :, 3])])
+    np_histograms = np.hstack(np.array([np.histogram(image[:, :, 0])[0],
+                              np.histogram(image[:, :, 0])[1],
+                              np.histogram(image[:, :, 1])[0],
+                              np.histogram(image[:, :, 1])[1],
+                              np.histogram(image[:, :, 2])[0],
+                              np.histogram(image[:, :, 2])[1],
+                              np.histogram(image[:, :, 3])[0],
+                              np.histogram(image[:, :, 3])[1]]))
 
+    general_image_stats = np.hstack([mean_array, std_array, median_array, np_histograms])
 
     for i in range(image.shape[0]):
         for j in range(image.shape[1]):
@@ -115,7 +125,7 @@ def create_image_features(image, masks, square_size, max_feature_count=20000):
         inputs = random.sample(inputs, max_feature_count)
 
     for i in inputs:
-        result_dicts.append(get_features_of_point(i[0], i[1], image, image_gradient, masks, square_size, std_array, mean_array))
+        result_dicts.append(get_features_of_point(i[0], i[1], image, image_gradient, masks, square_size, general_image_stats))
 
     return pd.DataFrame.from_dict(result_dicts)
 
@@ -231,28 +241,32 @@ def train_gb_classifier(x_train, x_test, y_train, y_test, n_estimators = 500, na
 
 
 def get_model_inputs():
+
+    gen = generate_input_image_and_masks()
+
+    dfs = []
+
+    while True:
+        try:
+            image, masks = next(gen)
+            dfs.append(create_image_features(image, masks, 10))
+        except OSError:
+            traceback.print_exc()
+        except:
+            traceback.print_exc()
+            break
+    df = pd.concat(dfs, ignore_index=True)
     try:
-        df = pd.read_pickle(files_loc + 'temp_input.plk')
-    except IOError:
-        gen = generate_input_image_and_masks()
-
-        dfs = []
-
-        while True:
-            try:
-                image, masks = next(gen)
-                dfs.append(create_image_features(image, masks, 8))
-            except:
-                traceback.print_exc()
-                break
-        df = pd.concat(dfs, ignore_index=True)
-
-        df.to_pickle(files_loc + 'temp_input.plk')
+        pass
+        #df.to_pickle(files_loc + 'temp_input.plk')
+    except:
+        traceback.print_exc()
 
     positive_matches = df[df['output'] > 0]
     negative_matches = df[df['output'] == 0]
     negative_matches = negative_matches.sample(n=positive_matches.shape[0])
     df = pd.concat([positive_matches, negative_matches], ignore_index=True)
+    df = df.sample(frac=1)
 
     x, y = [], []
     for _, i in df.iterrows():
@@ -278,7 +292,7 @@ def get_model_inputs():
 def train_models(x_train, x_test, y_train, y_test):
     train_rf_classifier(x_train, x_test, y_train, y_test, name = 'RF1')
     train_adaboost_classifier(x_train, x_test, y_train, y_test, name='ADA1')
-    train_nn_classifier(x_train, x_test, y_train, y_test, name='NN1')
+    #train_nn_classifier(x_train, x_test, y_train, y_test, name='NN1')
     train_et_classifier(x_train, x_test, y_train, y_test, name='ET1')
     train_gb_classifier(x_train, x_test, y_train, y_test, name='GB1')
 
