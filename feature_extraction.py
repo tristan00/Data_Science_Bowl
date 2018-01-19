@@ -15,15 +15,13 @@ import pickle
 import traceback
 #from dnn import DNN
 
-max_images = 500
-sample_per_image = 1000
+max_images = 600
+sample_per_image = 2500
 files_loc = 'C:/Users/tdelforge/Documents/Kaggle_datasets/data_science_bowl/'
 
 def generate_input_image_and_masks():
     folders = glob.glob(files_loc + 'stage1_train/*/')
     random.shuffle(folders)
-    print(len(folders))
-    folders = folders[:max_images]
 
     for folder in folders:
         try:
@@ -32,7 +30,6 @@ def generate_input_image_and_masks():
             image = Image.open(image_location)
             np_image = np.array(image.getdata())
             np_image = np_image.reshape(image.size[0], image.size[1], 4)
-            print(np_image.shape)
             # np_image = imageio.imread(image_location)
 
             masks = []
@@ -142,8 +139,8 @@ def create_image_features(image, masks, square_size, max_feature_count=1000):
     return pd.DataFrame.from_dict(result_dicts)
 
 
-def train_nn_classifier(x_train, x_test, y_train, y_test, max_iter = 1000,
-                        nn_shape = (1000, 1000,), activation = 'tanh', name = None, retrain = True):
+def train_nn_classifier(x_train, x_test, y_train, y_test, max_iter = 200,
+                        nn_shape = (2000, 2000,), activation = 'tanh', name = None, retrain = True):
     if not retrain:
         try:
             with open(name + '.plk') as model_file:
@@ -250,20 +247,19 @@ def train_gb_classifier(x_train, x_test, y_train, y_test, n_estimators = 500, na
             'clf':clf}
 
 
-def get_model_inputs():
-
+def get_dataframes(square_size):
     gen = generate_input_image_and_masks()
-
     dfs = []
 
-    for count, _ in range(max_images):
+    for count, _ in enumerate(range(max_images)):
         try:
             image, masks = next(gen)
-            dfs.append(create_image_features(image, masks, 10))
-            print(count)
+            dfs.append(create_image_features(image, masks, square_size))
         except StopIteration:
             traceback.print_exc()
             break
+
+    print('images read')
     df = pd.concat(dfs, ignore_index=True)
 
     positive_matches = df[df['output'] > 0]
@@ -271,10 +267,15 @@ def get_model_inputs():
     negative_matches = negative_matches.sample(n=positive_matches.shape[0])
     df = pd.concat([positive_matches, negative_matches], ignore_index=True)
     df = df.sample(frac=1)
+    return df
 
+
+def get_model_inputs(df, x_labels=['image']):
+    print('testing inputs: {0}'.format(x_labels))
     x, y = [], []
     for _, i in df.iterrows():
-        x.append(np.hstack([i['image'], i['general_image_stats']]))
+        x.append(np.hstack([i[x_label] for x_label in x_labels]))
+        #x.append(np.hstack([i['image'], i['general_image_stats']]))
         y.append(i['output'])
 
     x = np.vstack(x)
@@ -283,6 +284,8 @@ def get_model_inputs():
     x = np.nan_to_num(x)
     y = np.ravel(y)
 
+    print('arrays processed')
+
     print(x.shape, y.shape)
 
     x_train, x_test, y_train, y_test = train_test_split(x, y, test_size = 0.1)
@@ -290,21 +293,40 @@ def get_model_inputs():
     x_train = min_max_preprocessor.fit_transform(x_train)
     x_test = min_max_preprocessor.transform(x_test)
 
+    print('inputs preprocessed')
+
     return x_train, x_test, y_train, y_test
 
 
 def train_models(x_train, x_test, y_train, y_test):
     #train_rf_classifier(x_train, x_test, y_train, y_test, name = 'RF1')
     #train_adaboost_classifier(x_train, x_test, y_train, y_test, name='ADA1')
-    #train_nn_classifier(x_train, x_test, y_train, y_test, name='NN1')
+    train_nn_classifier(x_train, x_test, y_train, y_test, name='NN1')
     train_et_classifier(x_train, x_test, y_train, y_test, name='ET1')
     #train_gb_classifier(x_train, x_test, y_train, y_test, name='GB1')
 
 
 
 def main():
-    x_train, x_test, y_train, y_test = get_model_inputs()
-    train_models(x_train, x_test, y_train, y_test)
+
+    for i in [8, 12, 16,20,24,30]:
+        print()
+        print()
+        print('square size: {0}'.format(i))
+        df = get_dataframes(i)
+        x_train, x_test, y_train, y_test = get_model_inputs(df, x_labels=['image'])
+        train_models(x_train, x_test, y_train, y_test)
+        x_train, x_test, y_train, y_test = get_model_inputs(df, x_labels=['gradients'])
+        train_models(x_train, x_test, y_train, y_test)
+        x_train, x_test, y_train, y_test = get_model_inputs(df, x_labels=['image', 'general_image_stats'])
+        train_models(x_train, x_test, y_train, y_test)
+        x_train, x_test, y_train, y_test = get_model_inputs(df, x_labels=['gradients', 'general_image_stats'])
+        train_models(x_train, x_test, y_train, y_test)
+        x_train, x_test, y_train, y_test = get_model_inputs(df, x_labels=['gradients', 'image'])
+        train_models(x_train, x_test, y_train, y_test)
+        x_train, x_test, y_train, y_test = get_model_inputs(df, x_labels=['gradients', 'image', 'general_image_stats'])
+        train_models(x_train, x_test, y_train, y_test)
+
 
 if __name__ == '__main__':
     main()
