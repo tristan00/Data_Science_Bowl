@@ -15,7 +15,7 @@ import pickle
 import traceback
 #from dnn import DNN
 
-max_images = 600
+max_images = 1000
 sample_per_image = 2500
 files_loc = 'C:/Users/tdelforge/Documents/Kaggle_datasets/data_science_bowl/'
 
@@ -95,11 +95,11 @@ def get_features_of_point(x, y, image, image_gradient, masks, square_size, gener
         if i[x][y] > 0:
             y = 1
 
-    return {'output': y, 'image': image_list, 'gradients': gradient_list, 'general_image_stats':general_image_stats}
+    return {'output': y, 'image': image_list, 'gradients': np.array([]), 'general_image_stats':general_image_stats}
 
 
 
-def create_image_features(image, masks, square_size, max_feature_count=1000):
+def create_image_features(image, masks, square_size):
     result_dicts = []
 
     inputs = []
@@ -130,8 +130,8 @@ def create_image_features(image, masks, square_size, max_feature_count=1000):
     for i in range(image.shape[0]):
         for j in range(image.shape[1]):
             inputs.append((i,j))
-    if len(inputs) > max_feature_count:
-        inputs = random.sample(inputs, max_feature_count)
+    if len(inputs) > sample_per_image:
+        inputs = random.sample(inputs, sample_per_image)
 
     for i in inputs:
         result_dicts.append(get_features_of_point(i[0], i[1], image, image_gradient, masks, square_size, general_image_stats))
@@ -301,7 +301,7 @@ def get_model_inputs(df, x_labels=['image']):
 def train_models(x_train, x_test, y_train, y_test):
     #train_rf_classifier(x_train, x_test, y_train, y_test, name = 'RF1')
     #train_adaboost_classifier(x_train, x_test, y_train, y_test, name='ADA1')
-    train_nn_classifier(x_train, x_test, y_train, y_test, name='NN1')
+    #train_nn_classifier(x_train, x_test, y_train, y_test, name='NN1')
     train_et_classifier(x_train, x_test, y_train, y_test, name='ET1')
     #train_gb_classifier(x_train, x_test, y_train, y_test, name='GB1')
 
@@ -309,23 +309,16 @@ def train_models(x_train, x_test, y_train, y_test):
 
 def main():
 
-    for i in [8, 12, 16,20,24,30]:
+    for i in [12, 16,20,24,30]:
         print()
         print()
         print('square size: {0}'.format(i))
         df = get_dataframes(i)
         x_train, x_test, y_train, y_test = get_model_inputs(df, x_labels=['image'])
         train_models(x_train, x_test, y_train, y_test)
-        x_train, x_test, y_train, y_test = get_model_inputs(df, x_labels=['gradients'])
-        train_models(x_train, x_test, y_train, y_test)
         x_train, x_test, y_train, y_test = get_model_inputs(df, x_labels=['image', 'general_image_stats'])
         train_models(x_train, x_test, y_train, y_test)
-        x_train, x_test, y_train, y_test = get_model_inputs(df, x_labels=['gradients', 'general_image_stats'])
-        train_models(x_train, x_test, y_train, y_test)
-        x_train, x_test, y_train, y_test = get_model_inputs(df, x_labels=['gradients', 'image'])
-        train_models(x_train, x_test, y_train, y_test)
-        x_train, x_test, y_train, y_test = get_model_inputs(df, x_labels=['gradients', 'image', 'general_image_stats'])
-        train_models(x_train, x_test, y_train, y_test)
+
 
 
 if __name__ == '__main__':
