@@ -11,13 +11,30 @@ from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler
+from sklearn.cluster import spectral_clustering
+from sklearn.feature_extraction import image
 import pickle
+import shutil
+import os
 import traceback
 #from dnn import DNN
-
+from scipy.misc import imsave
+from sklearn.feature_extraction import image
+from scipy import ndimage
+from sklearn.cluster import spectral_clustering
+from scipy import misc
+import matplotlib.pyplot as plt
 max_images = 1000
-sample_per_image = 2500
+sample_per_image = 10000
 files_loc = 'C:/Users/tdelforge/Documents/Kaggle_datasets/data_science_bowl/'
+
+def ensure_dir(file_path):
+    directory = os.path.dirname(file_path)
+    if os.path.exists(directory):
+        shutil.rmtree(directory)
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+
 
 def generate_input_image_and_masks():
     folders = glob.glob(files_loc + 'stage1_train/*/')
@@ -84,7 +101,10 @@ def get_features_of_point(x, y, image, image_gradient, masks, square_size, gener
                 image_list.append(image[i][j])
                 for g in image_gradient:
                     gradient_list.append(g[i][j])
-    gradient_list = np.hstack(gradient_list)
+    try:
+        gradient_list = np.hstack(gradient_list)
+    except ValueError:
+        gradient_list = np.array([])
     image_list = np.hstack(image_list)
 
     #print(image_list.shape, gradient_list.shape, general_image_stats.shape)
@@ -95,7 +115,7 @@ def get_features_of_point(x, y, image, image_gradient, masks, square_size, gener
         if i[x][y] > 0:
             y = 1
 
-    return {'output': y, 'image': image_list, 'gradients': np.array([]), 'general_image_stats':general_image_stats}
+    return {'output': y, 'image': image_list, 'gradients': gradient_list, 'general_image_stats':general_image_stats}
 
 
 
@@ -195,8 +215,8 @@ def train_rf_classifier(x_train, x_test, y_train, y_test, n_estimators = 100,
             print('model not found, retraining')
     clf = RandomForestClassifier(n_estimators=n_estimators, max_depth=max_depth, max_features=max_features, n_jobs=-1)
     clf.fit(x_train, y_train)
-    # with open(name + '.plk', 'wb') as model_file:
-    #     pickle.dump(clf, model_file)
+    with open(files_loc+name + '.plk', 'wb') as model_file:
+        pickle.dump(clf, model_file)
     print('trained:', name, clf.score(x_test, y_test))
 
     test_res = clf.predict_proba(x_train)
@@ -213,10 +233,10 @@ def train_et_classifier(x_train, x_test, y_train, y_test, n_estimators = 500, na
             return {'model':clf}
         except IOError:
             print('model not found, retraining')
-    clf = ExtraTreesClassifier(n_estimators=n_estimators, n_jobs=-1)
+    clf = ExtraTreesClassifier(n_estimators=n_estimators, n_jobs=-2)
     clf.fit(x_train, y_train)
-    # with open(name + '.plk', 'wb') as model_file:
-    #     pickle.dump(clf, model_file)
+    with open(files_loc+name + '.plk', 'wb') as model_file:
+        pickle.dump(clf, model_file)
     print('trained:', name, clf.score(x_test, y_test))
 
     test_res = clf.predict_proba(x_train)
@@ -236,8 +256,8 @@ def train_gb_classifier(x_train, x_test, y_train, y_test, n_estimators = 500, na
             print('model not found, retraining')
     clf = GradientBoostingClassifier(n_estimators=n_estimators)
     clf.fit(x_train, y_train)
-    # with open(name + '.plk', 'wb') as model_file:
-    #     pickle.dump(clf, model_file)
+    with open(files_loc+name + '.plk', 'wb') as model_file:
+        pickle.dump(clf, model_file)
     print('trained:', name, clf.score(x_test, y_test))
 
     test_res = clf.predict_proba(x_train)
@@ -292,6 +312,8 @@ def get_model_inputs(df, x_labels=['image']):
     min_max_preprocessor = MinMaxScaler([-1,1])
     x_train = min_max_preprocessor.fit_transform(x_train)
     x_test = min_max_preprocessor.transform(x_test)
+    with open(files_loc+'scaler' + '.plk', 'wb') as model_file:
+        pickle.dump(min_max_preprocessor, model_file)
 
     print('inputs preprocessed')
 
@@ -301,28 +323,144 @@ def get_model_inputs(df, x_labels=['image']):
 def train_models(x_train, x_test, y_train, y_test):
     #train_rf_classifier(x_train, x_test, y_train, y_test, name = 'RF1')
     #train_adaboost_classifier(x_train, x_test, y_train, y_test, name='ADA1')
-    #train_nn_classifier(x_train, x_test, y_train, y_test, name='NN1')
-    train_et_classifier(x_train, x_test, y_train, y_test, name='ET1')
+    train_nn_classifier(x_train, x_test, y_train, y_test, name='NN1')
+    #train_et_classifier(x_train, x_test, y_train, y_test, name='ET1')
     #train_gb_classifier(x_train, x_test, y_train, y_test, name='GB1')
 
 
+def predict_picture(image_location, output_folder, clf, cuttoff):
+
+    input_image = Image.open(image_location)
+    input_image.save(output_folder + 'input.png')
+
+    np_image = np.array(input_image.getdata())
+    np_image = np_image.reshape(input_image.size[0], input_image.size[1], 4)
+    input_image = np_image
+
+    mean_array = np.array([np.mean(input_image[:,:,0]),
+                           np.mean(input_image[:, :, 1]),
+                           np.mean(input_image[:, :, 2]),
+                           np.mean(input_image[:, :, 3])])
+    std_array = np.array([np.std(input_image[:, :, 0]),
+                           np.std(input_image[:, :, 1]),
+                           np.std(input_image[:, :, 2]),
+                           np.std(input_image[:, :, 3])])
+    median_array = np.array([np.median(input_image[:, :, 0]),
+                           np.median(input_image[:, :, 1]),
+                           np.median(input_image[:, :, 2]),
+                           np.median(input_image[:, :, 3])])
+    np_histograms = np.hstack(np.array([np.histogram(input_image[:, :, 0])[0],
+                              np.histogram(input_image[:, :, 0])[1],
+                              np.histogram(input_image[:, :, 1])[0],
+                              np.histogram(input_image[:, :, 1])[1],
+                              np.histogram(input_image[:, :, 2])[0],
+                              np.histogram(input_image[:, :, 2])[1],
+                              np.histogram(input_image[:, :, 3])[0],
+                              np.histogram(input_image[:, :, 3])[1]]))
+
+    general_image_stats = np.hstack([mean_array, std_array, median_array, np_histograms])
+
+    output = []
+    for i in range(input_image.shape[0]):
+        temp = []
+        for j in range(input_image.shape[1]):
+            temp.append(0)
+        output.append(temp)
+    output_image = np.array(output)
+
+    with open(files_loc + 'scaler' + '.plk', 'rb') as model_file:
+        scaler = pickle.load(model_file)
+
+
+    output_vector = []
+    for i in range(input_image.shape[0]):
+        for j in range(input_image.shape[1]):
+            features = get_features_of_point(i, j, input_image, [], [], 12, general_image_stats)
+            features =np.hstack([features['image'], features['general_image_stats']])
+            features = np.nan_to_num(features)
+            output_vector.append(features)
+    output_vector = np.vstack(output_vector)
+    output_vector = scaler.transform(output_vector)
+
+    output_vector = clf.predict(output_vector)
+    output_vector = output_vector.reshape(np_image.shape[0], np_image.shape[1])*255
+    #output_image = Image.fromarray(output_vector)
+    #output_image.save(output_folder + 'output.png')
+    graph = image.img_to_graph(output_vector)
+
+    labels = spectral_clustering(graph)
+    print(labels)
+
+    imsave(output_folder + 'output.png', output_vector)
+    print(output_folder)
+    # for i in rmultiply arrayange(image.shape[0]):
+    #     for j in range(image.shape[1]):
+    #         features = get_features_of_point(i, j, image, [], [], 12, general_image_stats)
+    #         features =np.hstack([features['image'], features['general_image_stats']])
+    #         features = np.reshape(features, (1, -1))
+    #         features = np.nan_to_num(features)
+    #         features = scaler.transform(features)
+    #         output_image[i,j] = 255 if clf.predict_proba(features)[0][1] > cuttoff else 0
+    #     print(i)
+    # print(1)
+    # output_image = Image.fromarray(output_image)
+    # output_image.save(output_folder + 'output.png')
+
+def image_clustering(image_path, output_path):
+
+    scipy_image = misc.imread(image_path)
+    mask = scipy_image.astype(bool)
+    graph = image.img_to_graph(scipy_image, mask=mask)
+    graph.data = np.exp(-graph.data / graph.data.std())
+    labels = spectral_clustering(graph)
+    label_im = -np.ones(mask.shape)
+    label_im[mask] = labels
+    print()
+
+    # plt.imshow(scipy_image)
+    # plt.show()
+
 
 def main():
+    df = get_dataframes(16)
+    x_train, x_test, y_train, y_test = get_model_inputs(df, x_labels=['image', 'general_image_stats'])
+    train_models(x_train, x_test, y_train, y_test)
 
-    for i in [12, 16,20,24,30]:
-        print()
-        print()
-        print('square size: {0}'.format(i))
-        df = get_dataframes(i)
-        x_train, x_test, y_train, y_test = get_model_inputs(df, x_labels=['image'])
-        train_models(x_train, x_test, y_train, y_test)
-        x_train, x_test, y_train, y_test = get_model_inputs(df, x_labels=['image', 'general_image_stats'])
-        train_models(x_train, x_test, y_train, y_test)
+    # with open(files_loc + 'RF1' + '.plk', 'rb') as model_file:
+    #     clf = pickle.load(model_file)
 
+    # folders = glob.glob(files_loc + 'stage1_train/*/')
+    # random.shuffle(folders)
+    #
+    # for folder in folders:
+    #     image_location = glob.glob(folder + 'images/*')[0]
+    #     ensure_dir(folder + 'output/')
+    #     #predict_picture(image_location,folder + 'output/', clf, 128)
+    #     image_clustering(image_location, folder + 'output/')
+
+
+def test_nn():
+
+    n = 8
+
+    shapes = [(2000, ), (2000, 2000,), (3000,), (3000, 3000,), (2000,2000,2000,)]
+    activations = ['relu', 'tanh']
+    max_epochs = [1, 5]
+
+    df = get_dataframes(n)
+    x_train, x_test, y_train, y_test = get_model_inputs(df, x_labels=['image', 'general_image_stats', 'gradients'])
+    for s in shapes:
+        for a in activations:
+            for m in max_epochs:
+
+
+                print(s, a, m)
+                #train_models(x_train, x_test, y_train, y_test)
+                train_nn_classifier(x_train, x_test, y_train, y_test, name='NN1', nn_shape=s, activation=a, max_iter=m)
 
 
 if __name__ == '__main__':
-    main()
+    test_nn()
 
 
 
