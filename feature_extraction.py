@@ -11,6 +11,7 @@ from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler
+import math
 from sklearn.cluster import spectral_clustering
 from sklearn.feature_extraction import image
 import pickle
@@ -19,11 +20,19 @@ import os
 import traceback
 #from dnn import DNN
 from scipy.misc import imsave
+from scipy.ndimage import gaussian_gradient_magnitude
 from sklearn.feature_extraction import image
 from scipy import ndimage
 from sklearn.cluster import spectral_clustering
 from scipy import misc
 import matplotlib.pyplot as plt
+import lightgbm
+import catboost
+import keras
+from keras.models import Sequential
+from keras.layers import Dense
+
+
 max_images = 1000
 sample_per_image = 10000
 files_loc = 'C:/Users/tdelforge/Documents/Kaggle_datasets/data_science_bowl/'
@@ -44,9 +53,10 @@ def generate_input_image_and_masks():
         try:
             image_location = glob.glob(folder + 'images/*')[0]
             mask_locations = glob.glob(folder + 'masks/*')
-            image = Image.open(image_location)
-            np_image = np.array(image.getdata())
-            np_image = np_image.reshape(image.size[0], image.size[1], 4)
+            image = Image.open(image_location).convert('LA')
+            np_image = np.array(image.getdata())[:,0]
+            np_image = np_image.reshape(image.size[0], image.size[1])
+            np_gradient_image = gaussian_gradient_magnitude(np_image, sigma=.4)
             # np_image = imageio.imread(image_location)
 
             masks = []
@@ -59,7 +69,7 @@ def generate_input_image_and_masks():
         except OSError:
             continue
 
-        yield np_image, masks
+        yield np_image, np_gradient_image, masks
 
 
     # while True:
@@ -85,67 +95,59 @@ def generate_input_image_and_masks():
     #     yield np_image, masks
 
 
-def get_features_of_point(x, y, image, image_gradient, masks, square_size, general_image_stats):
+def get_features_of_point(x, y, image, image_gradient, gradients, masks, square_size, general_image_stats):
     x_list = []
 
     image_list = []
-    gradient_list = []
+    gm_list = []
+    gd_list = []
 
     for i in range(x - square_size//2, 1 + x + square_size//2):
         for j in range(y - square_size // 2, 1 + y + square_size // 2):
             if i < 0 or i >= image.shape[0] or j < 0 or j >= image.shape[1]:
-                image_list.append(np.full([4,], np.nan))
-                for g in image_gradient:
-                    gradient_list.append(np.full([4, ], np.nan))
+                image_list.append(np.full([1,], np.nan))
+                gm_list.append(np.full([1,], np.nan))
+                gd_list.append(np.full([1,], np.nan))
+
             else:
                 image_list.append(image[i][j])
-                for g in image_gradient:
-                    gradient_list.append(g[i][j])
+                gm_list.append(image_gradient[i][j])
+                gd_list.append(math.atan2(gradients[1][i][j], gradients[0][i][j]))
+                #gd_list.append(np.arctan2((0,0), (gradients[0][i][j], gradients[1][i][j])))
     try:
-        gradient_list = np.hstack(gradient_list)
+        gd_list = np.hstack(gd_list)
+        gm_list = np.hstack(gm_list)
+        gradient_list = np.hstack([gd_list, gm_list])
     except ValueError:
+        traceback.print_exc()
         gradient_list = np.array([])
     image_list = np.hstack(image_list)
-
-    #print(image_list.shape, gradient_list.shape, general_image_stats.shape)
-
 
     y = 0
     for i in masks:
         if i[x][y] > 0:
             y = 1
 
-    return {'output': y, 'image': image_list, 'gradients': gradient_list, 'general_image_stats':general_image_stats}
+    return {'output': y, 'image': image_list,
+            'gradients': gradient_list,
+            'general_image_stats':general_image_stats}
 
 
 
-def create_image_features(image, masks, square_size):
+def create_image_features(image, image_gm, masks, square_size):
     result_dicts = []
 
     inputs = []
-    image_gradient = np.gradient(image)
-    mean_array = np.array([np.mean(image[:,:,0]),
-                           np.mean(image[:, :, 1]),
-                           np.mean(image[:, :, 2]),
-                           np.mean(image[:, :, 3])])
-    std_array = np.array([np.std(image[:, :, 0]),
-                           np.std(image[:, :, 1]),
-                           np.std(image[:, :, 2]),
-                           np.std(image[:, :, 3])])
-    median_array = np.array([np.median(image[:, :, 0]),
-                           np.median(image[:, :, 1]),
-                           np.median(image[:, :, 2]),
-                           np.median(image[:, :, 3])])
-    np_histograms = np.hstack(np.array([np.histogram(image[:, :, 0])[0],
-                              np.histogram(image[:, :, 0])[1],
-                              np.histogram(image[:, :, 1])[0],
-                              np.histogram(image[:, :, 1])[1],
-                              np.histogram(image[:, :, 2])[0],
-                              np.histogram(image[:, :, 2])[1],
-                              np.histogram(image[:, :, 3])[0],
-                              np.histogram(image[:, :, 3])[1]]))
 
-    general_image_stats = np.hstack([mean_array, std_array, median_array, np_histograms])
+    gradients = np.gradient(image)
+
+    mean = np.mean(image[:,:])
+    std = np.std(image[:, :])
+    median =np.median(image[:, :])
+    np_histograms = np.hstack(np.array([np.histogram(image[:, :])[0],
+                              np.histogram(image[:, :])[1]]))
+
+    general_image_stats = np.hstack([np.array([mean, std, median]), np_histograms])
 
     for i in range(image.shape[0]):
         for j in range(image.shape[1]):
@@ -154,12 +156,28 @@ def create_image_features(image, masks, square_size):
         inputs = random.sample(inputs, sample_per_image)
 
     for i in inputs:
-        result_dicts.append(get_features_of_point(i[0], i[1], image, image_gradient, masks, square_size, general_image_stats))
+        result_dicts.append(get_features_of_point(i[0], i[1], image, image_gm, gradients, masks, square_size, general_image_stats))
 
     return pd.DataFrame.from_dict(result_dicts)
 
 
-def train_nn_classifier(x_train, x_test, y_train, y_test, max_iter = 200,
+def train_nn_classifier_keras(x_train, x_test, y_train, y_test, name = None, retrain = True):
+
+    model = Sequential()
+    print(x_train.shape, x_test.shape)
+    model.add(Dense(2000, input_dim=x_train.shape[1], activation='selu'))
+    model.add(Dense(2000, activation='selu'))
+    model.add(Dense(2000, activation='selu'))
+    model.add(Dense(2000, activation='selu'))
+    model.add(Dense(1, activation='sigmoid'))
+
+    model.compile(loss='binary_crossentropy', optimizer='sgd', metrics=['accuracy'])
+    model.fit(x_train, y_train, epochs=100, batch_size=1000)
+    scores = model.evaluate(x_test, y_test)
+    print("\n%s: %.2f%%" % (model.metrics_names[1], scores[1] * 100))
+
+
+def train_nn_classifier(x_train, x_test, y_train, y_test, max_iter = 10,
                         nn_shape = (2000, 2000,), activation = 'tanh', name = None, retrain = True):
     if not retrain:
         try:
@@ -182,7 +200,7 @@ def train_nn_classifier(x_train, x_test, y_train, y_test, max_iter = 200,
             'clf':clf}
 
 
-def train_adaboost_classifier(x_train, x_test, y_train, y_test, n_estimators = 500, name = None, retrain = True):
+def train_et_classifier(x_train, x_test, y_train, y_test, n_estimators = 500, max_features = 'auto', name = None, retrain = True):
     if not retrain:
         try:
             with open(name + '.plk') as model_file:
@@ -190,50 +208,7 @@ def train_adaboost_classifier(x_train, x_test, y_train, y_test, n_estimators = 5
             return {'model':clf}
         except IOError:
             print('model not found, retraining')
-    clf = AdaBoostClassifier(n_estimators=n_estimators)
-    clf.fit(x_train, y_train)
-    # with open(name + '.plk', 'wb') as model_file:
-    #     pickle.dump(clf, model_file)
-    print('trained:', name, clf.score(x_test, y_test))
-
-    test_res = clf.predict_proba(x_train)
-    train_res = clf.predict_proba(x_test)
-    return {'test_predictions':test_res,
-            'train_predictions':train_res,
-            'clf':clf}
-
-
-
-def train_rf_classifier(x_train, x_test, y_train, y_test, n_estimators = 100,
-                        max_depth = None, max_features = None, name = None, retrain = True):
-    if not retrain:
-        try:
-            with open(name + '.plk') as model_file:
-                clf = pickle.load(model_file)
-            return {'model':clf}
-        except IOError:
-            print('model not found, retraining')
-    clf = RandomForestClassifier(n_estimators=n_estimators, max_depth=max_depth, max_features=max_features, n_jobs=-1)
-    clf.fit(x_train, y_train)
-    with open(files_loc+name + '.plk', 'wb') as model_file:
-        pickle.dump(clf, model_file)
-    print('trained:', name, clf.score(x_test, y_test))
-
-    test_res = clf.predict_proba(x_train)
-    train_res = clf.predict_proba(x_test)
-    return {'test_predictions':test_res,
-            'train_predictions':train_res,
-            'clf':clf}
-
-def train_et_classifier(x_train, x_test, y_train, y_test, n_estimators = 500, name = None, retrain = True):
-    if not retrain:
-        try:
-            with open(name + '.plk') as model_file:
-                clf = pickle.load(model_file)
-            return {'model':clf}
-        except IOError:
-            print('model not found, retraining')
-    clf = ExtraTreesClassifier(n_estimators=n_estimators, n_jobs=-2)
+    clf = ExtraTreesClassifier(n_estimators=n_estimators, max_features = max_features, n_jobs=-2)
     clf.fit(x_train, y_train)
     with open(files_loc+name + '.plk', 'wb') as model_file:
         pickle.dump(clf, model_file)
@@ -246,7 +221,7 @@ def train_et_classifier(x_train, x_test, y_train, y_test, n_estimators = 500, na
             'clf':clf}
 
 
-def train_gb_classifier(x_train, x_test, y_train, y_test, n_estimators = 500, name = None, retrain = True):
+def train_lightgbm_classifier(x_train, x_test, y_train, y_test, name = None, retrain = True):
     if not retrain:
         try:
             with open(name + '.plk') as model_file:
@@ -254,7 +229,7 @@ def train_gb_classifier(x_train, x_test, y_train, y_test, n_estimators = 500, na
             return {'model':clf}
         except IOError:
             print('model not found, retraining')
-    clf = GradientBoostingClassifier(n_estimators=n_estimators)
+    clf = lightgbm.LGBMClassifier()
     clf.fit(x_train, y_train)
     with open(files_loc+name + '.plk', 'wb') as model_file:
         pickle.dump(clf, model_file)
@@ -265,6 +240,27 @@ def train_gb_classifier(x_train, x_test, y_train, y_test, n_estimators = 500, na
     return {'test_predictions':test_res,
             'train_predictions':train_res,
             'clf':clf}
+
+def train_catboost_classifier(x_train, x_test, y_train, y_test, name = None, retrain = True):
+    if not retrain:
+        try:
+            with open(name + '.plk') as model_file:
+                clf = pickle.load(model_file)
+            return {'model':clf}
+        except IOError:
+            print('model not found, retraining')
+    clf = catboost.CatBoostClassifier(verbose=False)
+    clf.fit(x_train, y_train)
+    with open(files_loc+name + '.plk', 'wb') as model_file:
+        pickle.dump(clf, model_file)
+    print('trained:', name, clf.score(x_test, y_test))
+
+    test_res = clf.predict_proba(x_train)
+    train_res = clf.predict_proba(x_test)
+    return {'test_predictions':test_res,
+            'train_predictions':train_res,
+            'clf':clf}
+
 
 
 def get_dataframes(square_size):
@@ -272,9 +268,10 @@ def get_dataframes(square_size):
     dfs = []
 
     for count, _ in enumerate(range(max_images)):
+        print(count)
         try:
-            image, masks = next(gen)
-            dfs.append(create_image_features(image, masks, square_size))
+            image, image_gm, masks = next(gen)
+            dfs.append(create_image_features(image, image_gm, masks, square_size))
         except StopIteration:
             traceback.print_exc()
             break
@@ -320,92 +317,6 @@ def get_model_inputs(df, x_labels=['image']):
     return x_train, x_test, y_train, y_test
 
 
-def train_models(x_train, x_test, y_train, y_test):
-    #train_rf_classifier(x_train, x_test, y_train, y_test, name = 'RF1')
-    #train_adaboost_classifier(x_train, x_test, y_train, y_test, name='ADA1')
-    train_nn_classifier(x_train, x_test, y_train, y_test, name='NN1')
-    #train_et_classifier(x_train, x_test, y_train, y_test, name='ET1')
-    #train_gb_classifier(x_train, x_test, y_train, y_test, name='GB1')
-
-
-def predict_picture(image_location, output_folder, clf, cuttoff):
-
-    input_image = Image.open(image_location)
-    input_image.save(output_folder + 'input.png')
-
-    np_image = np.array(input_image.getdata())
-    np_image = np_image.reshape(input_image.size[0], input_image.size[1], 4)
-    input_image = np_image
-
-    mean_array = np.array([np.mean(input_image[:,:,0]),
-                           np.mean(input_image[:, :, 1]),
-                           np.mean(input_image[:, :, 2]),
-                           np.mean(input_image[:, :, 3])])
-    std_array = np.array([np.std(input_image[:, :, 0]),
-                           np.std(input_image[:, :, 1]),
-                           np.std(input_image[:, :, 2]),
-                           np.std(input_image[:, :, 3])])
-    median_array = np.array([np.median(input_image[:, :, 0]),
-                           np.median(input_image[:, :, 1]),
-                           np.median(input_image[:, :, 2]),
-                           np.median(input_image[:, :, 3])])
-    np_histograms = np.hstack(np.array([np.histogram(input_image[:, :, 0])[0],
-                              np.histogram(input_image[:, :, 0])[1],
-                              np.histogram(input_image[:, :, 1])[0],
-                              np.histogram(input_image[:, :, 1])[1],
-                              np.histogram(input_image[:, :, 2])[0],
-                              np.histogram(input_image[:, :, 2])[1],
-                              np.histogram(input_image[:, :, 3])[0],
-                              np.histogram(input_image[:, :, 3])[1]]))
-
-    general_image_stats = np.hstack([mean_array, std_array, median_array, np_histograms])
-
-    output = []
-    for i in range(input_image.shape[0]):
-        temp = []
-        for j in range(input_image.shape[1]):
-            temp.append(0)
-        output.append(temp)
-    output_image = np.array(output)
-
-    with open(files_loc + 'scaler' + '.plk', 'rb') as model_file:
-        scaler = pickle.load(model_file)
-
-
-    output_vector = []
-    for i in range(input_image.shape[0]):
-        for j in range(input_image.shape[1]):
-            features = get_features_of_point(i, j, input_image, [], [], 12, general_image_stats)
-            features =np.hstack([features['image'], features['general_image_stats']])
-            features = np.nan_to_num(features)
-            output_vector.append(features)
-    output_vector = np.vstack(output_vector)
-    output_vector = scaler.transform(output_vector)
-
-    output_vector = clf.predict(output_vector)
-    output_vector = output_vector.reshape(np_image.shape[0], np_image.shape[1])*255
-    #output_image = Image.fromarray(output_vector)
-    #output_image.save(output_folder + 'output.png')
-    graph = image.img_to_graph(output_vector)
-
-    labels = spectral_clustering(graph)
-    print(labels)
-
-    imsave(output_folder + 'output.png', output_vector)
-    print(output_folder)
-    # for i in rmultiply arrayange(image.shape[0]):
-    #     for j in range(image.shape[1]):
-    #         features = get_features_of_point(i, j, image, [], [], 12, general_image_stats)
-    #         features =np.hstack([features['image'], features['general_image_stats']])
-    #         features = np.reshape(features, (1, -1))
-    #         features = np.nan_to_num(features)
-    #         features = scaler.transform(features)
-    #         output_image[i,j] = 255 if clf.predict_proba(features)[0][1] > cuttoff else 0
-    #     print(i)
-    # print(1)
-    # output_image = Image.fromarray(output_image)
-    # output_image.save(output_folder + 'output.png')
-
 def image_clustering(image_path, output_path):
 
     scipy_image = misc.imread(image_path)
@@ -421,10 +332,38 @@ def image_clustering(image_path, output_path):
     # plt.show()
 
 
+def test_nn():
+
+    n = 14
+
+    #activations = ['relu', 'tanh']
+    n_estimators = [100, 250, 500, 1000]
+    max_features = ['sqrt', 'log2', None]
+
+
+    df = get_dataframes(n)
+    x_train, x_test, y_train, y_test = get_model_inputs(df, x_labels=['image', 'general_image_stats'])
+    for s in n_estimators:
+        for m in max_features:
+            print(s, m)
+            #train_models(x_train, x_test, y_train, y_test)
+            train_et_classifier(x_train, x_test, y_train, y_test, name='NN1', n_estimators=s, max_features=m)
+
+
+
+def train_models(x_train, x_test, y_train, y_test):
+    train_nn_classifier_keras(x_train, x_test, y_train, y_test)
+    train_et_classifier(x_train, x_test, y_train, y_test, name='ET1')
+    train_lightgbm_classifier(x_train, x_test, y_train, y_test, name='LGBM1')
+    #train_nn_classifier(x_train, x_test, y_train, y_test, name='NN1')
+    train_catboost_classifier(x_train, x_test, y_train, y_test, name='CAT1')
+
+
 def main():
     df = get_dataframes(16)
-    x_train, x_test, y_train, y_test = get_model_inputs(df, x_labels=['image', 'general_image_stats'])
+    x_train, x_test, y_train, y_test = get_model_inputs(df, x_labels=['image', 'gradients', 'general_image_stats'])
     train_models(x_train, x_test, y_train, y_test)
+
 
     # with open(files_loc + 'RF1' + '.plk', 'rb') as model_file:
     #     clf = pickle.load(model_file)
@@ -439,28 +378,9 @@ def main():
     #     image_clustering(image_location, folder + 'output/')
 
 
-def test_nn():
-
-    n = 8
-
-    shapes = [(2000, ), (2000, 2000,), (3000,), (3000, 3000,), (2000,2000,2000,)]
-    activations = ['relu', 'tanh']
-    max_epochs = [1, 5]
-
-    df = get_dataframes(n)
-    x_train, x_test, y_train, y_test = get_model_inputs(df, x_labels=['image', 'general_image_stats', 'gradients'])
-    for s in shapes:
-        for a in activations:
-            for m in max_epochs:
-
-
-                print(s, a, m)
-                #train_models(x_train, x_test, y_train, y_test)
-                train_nn_classifier(x_train, x_test, y_train, y_test, name='NN1', nn_shape=s, activation=a, max_iter=m)
-
 
 if __name__ == '__main__':
-    test_nn()
+    main()
 
 
 
