@@ -3,29 +3,30 @@ import pandas as pd
 import glob
 import random
 from PIL import Image
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.ensemble import AdaBoostClassifier
+from keras.models import Sequential
+from keras.layers.core import Dense, Dropout, Activation, Flatten
+from keras.layers.normalization import BatchNormalization
+from keras.layers import Conv2D, MaxPooling2D, ZeroPadding2D, GlobalAveragePooling2D, LeakyReLU
+from keras.optimizers import RMSprop, Adam, Adadelta
+import urllib.request
+import io
+import numpy as np
+import random
+import scipy.misc
+from keras import optimizers
 from sklearn.neural_network import MLPClassifier
 from sklearn.ensemble import ExtraTreesClassifier
-from sklearn.ensemble import GradientBoostingClassifier
-from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler
 import math
-from sklearn.cluster import spectral_clustering
-from sklearn.feature_extraction import image
 import pickle
 import shutil
 import os
 import traceback
-#from dnn import DNN
-from scipy.misc import imsave
 from scipy.ndimage import gaussian_gradient_magnitude
 from sklearn.feature_extraction import image
-from scipy import ndimage
 from sklearn.cluster import spectral_clustering
 from scipy import misc
-import matplotlib.pyplot as plt
 import lightgbm
 import catboost
 import keras
@@ -129,8 +130,10 @@ def get_features_of_point(x, y, image, image_gradient, gradients, masks, square_
             y = 1
 
     return {'output': y, 'image': image_list,
-            'gradients': gradient_list,
-            'general_image_stats':general_image_stats}
+            # 'gradients': gradient_list,
+            # 'general_image_stats':general_image_stats
+            }
+
 
 
 
@@ -158,6 +161,35 @@ def create_image_features(image, image_gm, masks, square_size):
     for i in inputs:
         result_dicts.append(get_features_of_point(i[0], i[1], image, image_gm, gradients, masks, square_size, general_image_stats))
 
+    return pd.DataFrame.from_dict(result_dicts)
+
+
+def get_image_array(image, size, x, y, masks):
+    output_dict = dict()
+    output_dict['image'] = np.expand_dims(image[int(x-size/2):int(x+size/2), int(y-size/2):int(y+size/2)], axis = 2)
+    output = 0
+    for i in masks:
+        if i[x][y] > 0:
+            output = 1
+    output_dict['output'] = output
+    if output_dict['image'].shape != (size, size, 1):
+        return None
+    else:
+        return output_dict
+
+
+def get_image_arrays(image, size, masks):
+    inputs = []
+    result_dicts = []
+    for i in range(image.shape[0]):
+        for j in range(image.shape[1]):
+            inputs.append((i,j))
+    if len(inputs) > sample_per_image:
+        inputs = random.sample(inputs, sample_per_image)
+    for i in inputs:
+        result_dicts.append(
+            get_image_array(image, size, i[0], i[1], masks))
+    result_dicts = [i for i in result_dicts if i]
     return pd.DataFrame.from_dict(result_dicts)
 
 
@@ -262,6 +294,40 @@ def train_catboost_classifier(x_train, x_test, y_train, y_test, name = None, ret
             'clf':clf}
 
 
+def get_cnn():
+
+
+    model = Sequential()
+
+    model.add(Conv2D(64, (3, 3), input_shape=(32, 32, 1)))
+    model.add(BatchNormalization(axis=-1))
+    model.add(LeakyReLU())
+    model.add(Conv2D(64, (3, 3)))
+    model.add(BatchNormalization(axis=-1))
+    model.add(LeakyReLU())
+    model.add(MaxPooling2D(pool_size=(2, 2)))
+
+    model.add(Conv2D(64, (3, 3)))
+    model.add(BatchNormalization(axis=-1))
+    model.add(LeakyReLU())
+    model.add(Conv2D(64, (3, 3)))
+    model.add(BatchNormalization(axis=-1))
+    model.add(LeakyReLU())
+    model.add(MaxPooling2D(pool_size=(2, 2)))
+
+    model.add(Flatten())
+
+    model.add(Dense(512))
+    model.add(BatchNormalization())
+    model.add(LeakyReLU())
+    model.add(Dropout(0.2))
+    model.add(Dense(1))
+
+    model.add(Activation('softmax'))
+    sgd = optimizers.SGD(lr=0.01, decay=1e-6, momentum=0.9, nesterov=True)
+    model.compile(loss=keras.losses.binary_crossentropy, optimizer=sgd, metrics=['accuracy'])
+    return model
+
 
 def get_dataframes(square_size):
     gen = generate_input_image_and_masks()
@@ -271,7 +337,8 @@ def get_dataframes(square_size):
         print(count)
         try:
             image, image_gm, masks = next(gen)
-            dfs.append(create_image_features(image, image_gm, masks, square_size))
+            #dfs.append(create_image_features(image, image_gm, masks, square_size))
+            dfs.append(get_image_arrays(image, square_size, masks))
         except StopIteration:
             traceback.print_exc()
             break
@@ -281,13 +348,15 @@ def get_dataframes(square_size):
 
     positive_matches = df[df['output'] > 0]
     negative_matches = df[df['output'] == 0]
+
+    print(positive_matches.shape, negative_matches.shape)
     negative_matches = negative_matches.sample(n=positive_matches.shape[0])
     df = pd.concat([positive_matches, negative_matches], ignore_index=True)
     df = df.sample(frac=1)
     return df
 
 
-def get_model_inputs(df, x_labels=['image']):
+def get_model_inputs(df, x_labels=['image'], test_size = 0.1):
     print('testing inputs: {0}'.format(x_labels))
     x, y = [], []
     for _, i in df.iterrows():
@@ -295,22 +364,23 @@ def get_model_inputs(df, x_labels=['image']):
         #x.append(np.hstack([i['image'], i['general_image_stats']]))
         y.append(i['output'])
 
-    x = np.vstack(x)
+
+
+    x = np.array(x)
     y = np.vstack(y)
 
     x = np.nan_to_num(x)
-    y = np.ravel(y)
 
     print('arrays processed')
 
     print(x.shape, y.shape)
 
-    x_train, x_test, y_train, y_test = train_test_split(x, y, test_size = 0.1)
-    min_max_preprocessor = MinMaxScaler([-1,1])
-    x_train = min_max_preprocessor.fit_transform(x_train)
-    x_test = min_max_preprocessor.transform(x_test)
-    with open(files_loc+'scaler' + '.plk', 'wb') as model_file:
-        pickle.dump(min_max_preprocessor, model_file)
+    x_train = x[0:int((1-test_size)*x.shape[0])]
+    x_test = x[int((1-test_size)*x.shape[0]):]
+    y_train = y[0:int((1-test_size)*x.shape[0])]
+    y_test = y[int((1-test_size)*x.shape[0]):]
+    print(x_train.shape, x_test.shape, y_train.shape, y_test.shape)
+
 
     print('inputs preprocessed')
 
@@ -359,10 +429,17 @@ def train_models(x_train, x_test, y_train, y_test):
     train_catboost_classifier(x_train, x_test, y_train, y_test, name='CAT1')
 
 
+def get_objects( ):
+    pass
+
+
 def main():
-    df = get_dataframes(16)
-    x_train, x_test, y_train, y_test = get_model_inputs(df, x_labels=['image', 'gradients', 'general_image_stats'])
-    train_models(x_train, x_test, y_train, y_test)
+    df = get_dataframes(32)
+    x_train, x_test, y_train, y_test = get_model_inputs(df, x_labels=['image'])
+    #train_models(x_train, x_test, y_train, y_test)
+
+    model = get_cnn()
+    model.fit(x_train, y_train, validation_data=(x_test, y_test))
 
 
     # with open(files_loc + 'RF1' + '.plk', 'rb') as model_file:
