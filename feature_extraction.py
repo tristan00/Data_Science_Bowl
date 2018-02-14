@@ -299,18 +299,18 @@ def get_cnn():
 
     model = Sequential()
 
-    model.add(Conv2D(64, (3, 3), input_shape=(32, 32, 1)))
+    model.add(Conv2D(16, (2, 2), input_shape=(32, 32, 1)))
     model.add(BatchNormalization(axis=-1))
     model.add(LeakyReLU())
-    model.add(Conv2D(64, (3, 3)))
+    model.add(Conv2D(16, (2, 2)))
     model.add(BatchNormalization(axis=-1))
     model.add(LeakyReLU())
     model.add(MaxPooling2D(pool_size=(2, 2)))
 
-    model.add(Conv2D(64, (3, 3)))
+    model.add(Conv2D(16, (2, 2)))
     model.add(BatchNormalization(axis=-1))
     model.add(LeakyReLU())
-    model.add(Conv2D(64, (3, 3)))
+    model.add(Conv2D(16, (2, 2)))
     model.add(BatchNormalization(axis=-1))
     model.add(LeakyReLU())
     model.add(MaxPooling2D(pool_size=(2, 2)))
@@ -320,11 +320,12 @@ def get_cnn():
     model.add(Dense(512))
     model.add(BatchNormalization())
     model.add(LeakyReLU())
-    model.add(Dropout(0.2))
-    model.add(Dense(1))
+    model.add(Dropout(0.5))
+
+    model.add(Dense(2))
 
     model.add(Activation('softmax'))
-    sgd = optimizers.SGD(lr=0.01, decay=1e-6, momentum=0.9, nesterov=True)
+    sgd = optimizers.SGD(lr=0.5, decay=1e-5, momentum=0.0, nesterov=False)
     model.compile(loss=keras.losses.binary_crossentropy, optimizer=sgd, metrics=['accuracy'])
     return model
 
@@ -356,7 +357,7 @@ def get_dataframes(square_size):
     return df
 
 
-def get_model_inputs(df, x_labels=['image'], test_size = 0.1):
+def get_model_inputs(df, x_labels=['image'], test_size = 0.01):
     print('testing inputs: {0}'.format(x_labels))
     x, y = [], []
     for _, i in df.iterrows():
@@ -439,7 +440,11 @@ def main():
     #train_models(x_train, x_test, y_train, y_test)
 
     model = get_cnn()
-    model.fit(x_train, y_train, validation_data=(x_test, y_test))
+
+    y_train = keras.utils.to_categorical(y_train, 2)
+    y_test = keras.utils.to_categorical(y_test, 2)
+
+    model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=100)
 
 
     # with open(files_loc + 'RF1' + '.plk', 'rb') as model_file:
