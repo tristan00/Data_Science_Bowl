@@ -35,7 +35,7 @@ from keras.layers import Dense
 
 
 max_images = 1000
-sample_per_image = 10000
+sample_per_image = 5000
 files_loc = 'C:/Users/tdelforge/Documents/Kaggle_datasets/data_science_bowl/'
 
 def ensure_dir(file_path):
@@ -75,7 +75,7 @@ def generate_input_image_and_masks():
 
 def get_image_array(image, size, x, y, masks):
     output_dict = dict()
-    output_dict['image'] = image[int(x-size/2):int(x+size/2), int(y-size/2):int(y+size/2)]
+    output_dict['image'] = image[int(x):int(x+size), int(y):int(y+size)]
     output_dict['image'] = np.expand_dims(output_dict['image'], axis = 2)
     output = 0
     for i in masks:
@@ -83,6 +83,7 @@ def get_image_array(image, size, x, y, masks):
             output = 1
     output_dict['output'] = output
     if output_dict['image'].shape != (size, size, 1):
+        print(x,y,output_dict['image'].shape)
         return None
     else:
         return output_dict
@@ -91,6 +92,9 @@ def get_image_array(image, size, x, y, masks):
 def get_image_arrays(image, size, masks):
     inputs = []
     result_dicts = []
+
+    adj_image = np.pad(image, size//2, mode='constant')
+
     for i in range(image.shape[0]):
         for j in range(image.shape[1]):
             inputs.append((i,j))
@@ -98,7 +102,7 @@ def get_image_arrays(image, size, masks):
         inputs = random.sample(inputs, sample_per_image)
     for i in inputs:
         result_dicts.append(
-            get_image_array(image, size, i[0], i[1], masks))
+            get_image_array(adj_image, size, i[0], i[1], masks))
     result_dicts = [i for i in result_dicts if i]
     return pd.DataFrame.from_dict(result_dicts)
 
@@ -209,21 +213,21 @@ def get_cnn():
 
     model = Sequential()
 
-    model.add(Conv2D(16, (2, 2), input_shape=(32, 32, 1)))
+    model.add(Conv2D(64, (2, 2), input_shape=(64, 64, 1)))
     model.add(BatchNormalization(axis=-1))
     model.add(LeakyReLU())
-    model.add(Conv2D(16, (2, 2)))
+    model.add(Conv2D(64, (2, 2)))
     model.add(BatchNormalization(axis=-1))
     model.add(LeakyReLU())
-    model.add(MaxPooling2D(pool_size=(2, 2)))
+    model.add(MaxPooling2D(pool_size=(3, 3)))
 
-    model.add(Conv2D(16, (2, 2)))
+    model.add(Conv2D(64, (2, 2)))
     model.add(BatchNormalization(axis=-1))
     model.add(LeakyReLU())
-    model.add(Conv2D(16, (2, 2)))
+    model.add(Conv2D(64, (2, 2)))
     model.add(BatchNormalization(axis=-1))
     model.add(LeakyReLU())
-    model.add(MaxPooling2D(pool_size=(2, 2)))
+    model.add(MaxPooling2D(pool_size=(3, 3)))
 
     model.add(Flatten())
 
@@ -231,7 +235,10 @@ def get_cnn():
     model.add(BatchNormalization())
     model.add(LeakyReLU())
     model.add(Dropout(0.5))
-
+    model.add(Dense(128))
+    model.add(BatchNormalization())
+    model.add(LeakyReLU())
+    model.add(Dropout(0.5))
     model.add(Dense(2))
 
     model.add(Activation('softmax'))
@@ -345,7 +352,7 @@ def get_objects( ):
 
 
 def main():
-    df = get_dataframes(32)
+    df = get_dataframes(64)
     x_train, x_test, y_train, y_test = get_model_inputs(df, x_labels=['image'])
     #train_models(x_train, x_test, y_train, y_test)
 
