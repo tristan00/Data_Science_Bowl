@@ -73,100 +73,10 @@ def generate_input_image_and_masks():
         yield np_image, np_gradient_image, masks
 
 
-    # while True:
-    #
-    #     folder = random.choice(folders)
-    #     print(folder)
-    #     image_location = glob.glob(folder + 'images/*')[0]
-    #     mask_locations = glob.glob(folder + 'masks/*')
-    #     image = Image.open(image_location)
-    #     np_image = np.array(image.getdata())
-    #     np_image = np_image.reshape(image.size[0], image.size[1], 4)
-    #     print(np_image.shape)
-    #     #np_image = imageio.imread(image_location)
-    #
-    #     masks = []
-    #     for i in mask_locations:
-    #         mask_image = Image.open(i)
-    #         np_mask = np.array(mask_image.getdata())
-    #         np_mask = np_mask.reshape(image.size[0], image.size[1])
-    #         masks.append(np_mask)
-    #         #masks.append(imageio.imread(i))
-    #
-    #     yield np_image, masks
-
-
-def get_features_of_point(x, y, image, image_gradient, gradients, masks, square_size, general_image_stats):
-    x_list = []
-
-    image_list = []
-    gm_list = []
-    gd_list = []
-
-    for i in range(x - square_size//2, 1 + x + square_size//2):
-        for j in range(y - square_size // 2, 1 + y + square_size // 2):
-            if i < 0 or i >= image.shape[0] or j < 0 or j >= image.shape[1]:
-                image_list.append(np.full([1,], np.nan))
-                gm_list.append(np.full([1,], np.nan))
-                gd_list.append(np.full([1,], np.nan))
-
-            else:
-                image_list.append(image[i][j])
-                gm_list.append(image_gradient[i][j])
-                gd_list.append(math.atan2(gradients[1][i][j], gradients[0][i][j]))
-                #gd_list.append(np.arctan2((0,0), (gradients[0][i][j], gradients[1][i][j])))
-    try:
-        gd_list = np.hstack(gd_list)
-        gm_list = np.hstack(gm_list)
-        gradient_list = np.hstack([gd_list, gm_list])
-    except ValueError:
-        traceback.print_exc()
-        gradient_list = np.array([])
-    image_list = np.hstack(image_list)
-
-    y = 0
-    for i in masks:
-        if i[x][y] > 0:
-            y = 1
-
-    return {'output': y, 'image': image_list,
-            # 'gradients': gradient_list,
-            # 'general_image_stats':general_image_stats
-            }
-
-
-
-
-def create_image_features(image, image_gm, masks, square_size):
-    result_dicts = []
-
-    inputs = []
-
-    gradients = np.gradient(image)
-
-    mean = np.mean(image[:,:])
-    std = np.std(image[:, :])
-    median =np.median(image[:, :])
-    np_histograms = np.hstack(np.array([np.histogram(image[:, :])[0],
-                              np.histogram(image[:, :])[1]]))
-
-    general_image_stats = np.hstack([np.array([mean, std, median]), np_histograms])
-
-    for i in range(image.shape[0]):
-        for j in range(image.shape[1]):
-            inputs.append((i,j))
-    if len(inputs) > sample_per_image:
-        inputs = random.sample(inputs, sample_per_image)
-
-    for i in inputs:
-        result_dicts.append(get_features_of_point(i[0], i[1], image, image_gm, gradients, masks, square_size, general_image_stats))
-
-    return pd.DataFrame.from_dict(result_dicts)
-
-
 def get_image_array(image, size, x, y, masks):
     output_dict = dict()
-    output_dict['image'] = np.expand_dims(image[int(x-size/2):int(x+size/2), int(y-size/2):int(y+size/2)], axis = 2)
+    output_dict['image'] = image[int(x-size/2):int(x+size/2), int(y-size/2):int(y+size/2)]
+    output_dict['image'] = np.expand_dims(output_dict['image'], axis = 2)
     output = 0
     for i in masks:
         if i[x][y] > 0:
