@@ -32,10 +32,11 @@ import catboost
 import keras
 from keras.models import Sequential
 from keras.layers import Dense
+import h5py
 
 
 max_images = 1000
-sample_per_image = 5000
+sample_per_image = 10000
 files_loc = 'C:/Users/tdelforge/Documents/Kaggle_datasets/data_science_bowl/'
 
 def ensure_dir(file_path):
@@ -107,124 +108,23 @@ def get_image_arrays(image, size, masks):
     return pd.DataFrame.from_dict(result_dicts)
 
 
-def train_nn_classifier_keras(x_train, x_test, y_train, y_test, name = None, retrain = True):
-
-    model = Sequential()
-    print(x_train.shape, x_test.shape)
-    model.add(Dense(2000, input_dim=x_train.shape[1], activation='selu'))
-    model.add(Dense(2000, activation='selu'))
-    model.add(Dense(2000, activation='selu'))
-    model.add(Dense(2000, activation='selu'))
-    model.add(Dense(1, activation='sigmoid'))
-
-    model.compile(loss='binary_crossentropy', optimizer='sgd', metrics=['accuracy'])
-    model.fit(x_train, y_train, epochs=100, batch_size=1000)
-    scores = model.evaluate(x_test, y_test)
-    print("\n%s: %.2f%%" % (model.metrics_names[1], scores[1] * 100))
-
-
-def train_nn_classifier(x_train, x_test, y_train, y_test, max_iter = 10,
-                        nn_shape = (2000, 2000,), activation = 'tanh', name = None, retrain = True):
-    if not retrain:
-        try:
-            with open(name + '.plk') as model_file:
-                clf = pickle.load(model_file)
-            return {'model':clf}
-        except IOError:
-            print('model not found, retraining')
-
-    clf = MLPClassifier(hidden_layer_sizes=nn_shape, activation=activation, max_iter=max_iter)
-    clf.fit(x_train, y_train)
-    # with open(name + '.plk', 'wb') as model_file:
-    #     pickle.dump(clf, model_file)
-    print('trained:', name, clf.score(x_test, y_test))
-
-    test_res = clf.predict_proba(x_train)
-    train_res = clf.predict_proba(x_test)
-    return {'test_predictions':test_res,
-            'train_predictions':train_res,
-            'clf':clf}
-
-
-def train_et_classifier(x_train, x_test, y_train, y_test, n_estimators = 500, max_features = 'auto', name = None, retrain = True):
-    if not retrain:
-        try:
-            with open(name + '.plk') as model_file:
-                clf = pickle.load(model_file)
-            return {'model':clf}
-        except IOError:
-            print('model not found, retraining')
-    clf = ExtraTreesClassifier(n_estimators=n_estimators, max_features = max_features, n_jobs=-2)
-    clf.fit(x_train, y_train)
-    with open(files_loc+name + '.plk', 'wb') as model_file:
-        pickle.dump(clf, model_file)
-    print('trained:', name, clf.score(x_test, y_test))
-
-    test_res = clf.predict_proba(x_train)
-    train_res = clf.predict_proba(x_test)
-    return {'test_predictions':test_res,
-            'train_predictions':train_res,
-            'clf':clf}
-
-
-def train_lightgbm_classifier(x_train, x_test, y_train, y_test, name = None, retrain = True):
-    if not retrain:
-        try:
-            with open(name + '.plk') as model_file:
-                clf = pickle.load(model_file)
-            return {'model':clf}
-        except IOError:
-            print('model not found, retraining')
-    clf = lightgbm.LGBMClassifier()
-    clf.fit(x_train, y_train)
-    with open(files_loc+name + '.plk', 'wb') as model_file:
-        pickle.dump(clf, model_file)
-    print('trained:', name, clf.score(x_test, y_test))
-
-    test_res = clf.predict_proba(x_train)
-    train_res = clf.predict_proba(x_test)
-    return {'test_predictions':test_res,
-            'train_predictions':train_res,
-            'clf':clf}
-
-def train_catboost_classifier(x_train, x_test, y_train, y_test, name = None, retrain = True):
-    if not retrain:
-        try:
-            with open(name + '.plk') as model_file:
-                clf = pickle.load(model_file)
-            return {'model':clf}
-        except IOError:
-            print('model not found, retraining')
-    clf = catboost.CatBoostClassifier(verbose=False)
-    clf.fit(x_train, y_train)
-    with open(files_loc+name + '.plk', 'wb') as model_file:
-        pickle.dump(clf, model_file)
-    print('trained:', name, clf.score(x_test, y_test))
-
-    test_res = clf.predict_proba(x_train)
-    train_res = clf.predict_proba(x_test)
-    return {'test_predictions':test_res,
-            'train_predictions':train_res,
-            'clf':clf}
-
-
 def get_cnn():
 
 
     model = Sequential()
 
-    model.add(Conv2D(64, (2, 2), input_shape=(64, 64, 1)))
+    model.add(Conv2D(32, (3, 3), input_shape=(32, 32, 1)))
     model.add(BatchNormalization(axis=-1))
     model.add(LeakyReLU())
-    model.add(Conv2D(64, (2, 2)))
+    model.add(Conv2D(32, (3, 3)))
     model.add(BatchNormalization(axis=-1))
     model.add(LeakyReLU())
     model.add(MaxPooling2D(pool_size=(3, 3)))
 
-    model.add(Conv2D(64, (2, 2)))
+    model.add(Conv2D(32, (3, 3)))
     model.add(BatchNormalization(axis=-1))
     model.add(LeakyReLU())
-    model.add(Conv2D(64, (2, 2)))
+    model.add(Conv2D(32, (3, 3)))
     model.add(BatchNormalization(axis=-1))
     model.add(LeakyReLU())
     model.add(MaxPooling2D(pool_size=(3, 3)))
@@ -320,39 +220,10 @@ def image_clustering(image_path, output_path):
     # plt.show()
 
 
-def test_nn():
-
-    n = 14
-
-    #activations = ['relu', 'tanh']
-    n_estimators = [100, 250, 500, 1000]
-    max_features = ['sqrt', 'log2', None]
-
-
-    df = get_dataframes(n)
-    x_train, x_test, y_train, y_test = get_model_inputs(df, x_labels=['image', 'general_image_stats'])
-    for s in n_estimators:
-        for m in max_features:
-            print(s, m)
-            #train_models(x_train, x_test, y_train, y_test)
-            train_et_classifier(x_train, x_test, y_train, y_test, name='NN1', n_estimators=s, max_features=m)
-
-
-
-def train_models(x_train, x_test, y_train, y_test):
-    train_nn_classifier_keras(x_train, x_test, y_train, y_test)
-    train_et_classifier(x_train, x_test, y_train, y_test, name='ET1')
-    train_lightgbm_classifier(x_train, x_test, y_train, y_test, name='LGBM1')
-    #train_nn_classifier(x_train, x_test, y_train, y_test, name='NN1')
-    train_catboost_classifier(x_train, x_test, y_train, y_test, name='CAT1')
-
-
-def get_objects( ):
-    pass
 
 
 def main():
-    df = get_dataframes(64)
+    df = get_dataframes(32)
     x_train, x_test, y_train, y_test = get_model_inputs(df, x_labels=['image'])
     #train_models(x_train, x_test, y_train, y_test)
 
@@ -361,20 +232,8 @@ def main():
     y_train = keras.utils.to_categorical(y_train, 2)
     y_test = keras.utils.to_categorical(y_test, 2)
 
-    model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=100)
-
-
-    # with open(files_loc + 'RF1' + '.plk', 'rb') as model_file:
-    #     clf = pickle.load(model_file)
-
-    # folders = glob.glob(files_loc + 'stage1_train/*/')
-    # random.shuffle(folders)
-    #
-    # for folder in folders:
-    #     image_location = glob.glob(folder + 'images/*')[0]
-    #     ensure_dir(folder + 'output/')
-    #     #predict_picture(image_location,folder + 'output/', clf, 128)
-    #     image_clustering(image_location, folder + 'output/')
+    model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=5)
+    model.save(files_loc + 'cnn1.h5')
 
 
 
