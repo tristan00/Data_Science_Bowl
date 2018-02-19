@@ -3,7 +3,7 @@ import glob
 from PIL import Image
 from keras.layers.core import Dense, Dropout, Activation, Flatten
 from keras.layers.normalization import BatchNormalization
-from keras.layers import Conv2D, MaxPooling2D, ZeroPadding2D, GlobalAveragePooling2D, LeakyReLU
+from keras.layers import Conv2D, MaxPooling2D, ZeroPadding2D, GlobalAveragePooling2D, LeakyReLU, Convolution2D
 from keras.models import load_model
 import numpy as np
 from sklearn.cluster import AffinityPropagation, KMeans, AgglomerativeClustering, SpectralClustering
@@ -21,11 +21,18 @@ import keras
 from keras.models import Sequential
 from keras.layers import Dense
 import h5py
-
+import pickle
 
 max_images = 1000
-sample_per_image = 12500
+sample_per_image = 5000
 files_loc = 'C:/Users/tdelforge/Documents/Kaggle_datasets/data_science_bowl/'
+
+k_means_image_size = (256, 256)
+
+
+def create_directory(directory):
+    if not os.path.exists(directory):
+        os.makedirs(directory)
 
 def ensure_dir(file_path):
     directory = os.path.dirname(file_path)
@@ -43,9 +50,14 @@ def generate_input_image_and_masks():
         try:
             image_location = glob.glob(folder + 'images/*')[0]
             mask_locations = glob.glob(folder + 'masks/*')
-            image = Image.open(image_location).convert('LA')
-            np_image = np.array(image.getdata())[:,0]
-            np_image = np_image.reshape(image.size[0], image.size[1])
+            start_image = Image.open(image_location).convert('LA')
+            np_image = np.array(start_image.getdata())[:,0]
+            np_image = np_image.reshape(start_image.size[0], start_image.size[1])
+
+            resized_np_image = scipy.misc.imresize(np_image, k_means_image_size)
+            # resized_np_image = np.array(start_image.getdata())[:,0]
+            # resized_np_image = resized_np_image.reshape(resized_image.size[0], resized_image.size[1])
+
             np_gradient_image = gaussian_gradient_magnitude(np_image, sigma=.4)
             # np_image = imageio.imread(image_location)
 
@@ -53,70 +65,42 @@ def generate_input_image_and_masks():
             for i in mask_locations:
                 mask_image = Image.open(i)
                 np_mask = np.array(mask_image.getdata())
-                np_mask = np_mask.reshape(image.size[0], image.size[1])
+                np_mask = np_mask.reshape(start_image.size[0], start_image.size[1])
                 masks.append(np_mask)
                 # masks.append(imageio.imread(i))
         except OSError:
             continue
 
-        yield np_image, np_gradient_image, masks
+        yield np_image, np_gradient_image, masks, resized_np_image
 
-
-def get_image_array(image, size, x, y, masks):
-    output_dict = dict()
-    output_dict['image'] = image[int(x):int(x+size), int(y):int(y+size)]
-    output_dict['image'] = np.expand_dims(output_dict['image'], axis = 2)
-    output = 0
-    for i in masks:
-        if i[x][y] > 0:
-            output = 1
-    output_dict['output'] = output
-    if output_dict['image'].shape != (size, size, 1):
-        print(x,y,output_dict['image'].shape)
-        return None
-    else:
-        return output_dict
-
-
-def get_image_arrays(image, size, masks):
-    inputs = []
-    result_dicts = []
-
-    adj_image = np.pad(image, size//2, mode='constant')
-
-    for i in range(image.shape[0]):
-        for j in range(image.shape[1]):
-            inputs.append((i,j))
-    if len(inputs) > sample_per_image:
-        inputs = random.sample(inputs, sample_per_image)
-    for i in inputs:
-        result_dicts.append(
-            get_image_array(adj_image, size, i[0], i[1], masks))
-    result_dicts = [i for i in result_dicts if i]
-    return pd.DataFrame.from_dict(result_dicts)
 
 
 def preprocess_images_for_kmeans(input_image, masks):
-    resized_image = np.resize(input_image, (256, 256))
-    transposed_image = np.transpose(resized_image)
-    resized_image2 = np.rot90(resized_image, 1)
-    resized_image3 = np.rot90(resized_image, 2)
-    resized_image4 = np.rot90(resized_image, 3)
-    transposed_image2 = np.rot90(resized_image, 1)
-    transposed_image3 = np.rot90(resized_image, 2)
-    transposed_image4 = np.rot90(resized_image, 3)
+    '''
+    creates large number of identical but differently preprocessed images to have more inputs
+    '''
+    resized_image = input_image
+
+    g_image = gaussian_gradient_magnitude(resized_image, 3)
+    gradients = np.gradient(resized_image)
+
+    #pic_part_list =  [np.expand_dims(i, axis = 2) for i in gradients] + [np.expand_dims(resized_image, axis = 2)] + [np.expand_dims(g_image, axis=2)]
+    pic_part_list = [np.expand_dims(resized_image, axis = 2)] + [np.expand_dims(g_image, axis=2)]
+
+    first_image = np.dstack(pic_part_list)
+    print(first_image.shape, len(masks))
+
+    resized_image2 = np.rot90(first_image, 1)
+    resized_image3 = np.rot90(first_image, 2)
+    resized_image4 = np.rot90(first_image, 3)
 
     num_of_results = len(masks)
-
     results = []
-    results.append({'input': resized_image, 'output':num_of_results})
-    results.append({'input': transposed_image, 'output':num_of_results})
+    results.append({'input': first_image, 'output':num_of_results})
     results.append({'input': resized_image2, 'output':num_of_results})
     results.append({'input': resized_image3, 'output':num_of_results})
     results.append({'input': resized_image4, 'output':num_of_results})
-    results.append({'input': transposed_image2, 'output':num_of_results})
-    results.append({'input': transposed_image3, 'output':num_of_results})
-    results.append({'input': transposed_image4, 'output':num_of_results})
+
 
     return pd.DataFrame.from_dict(results)
 
@@ -130,8 +114,8 @@ def get_inputs_for_k_means_cnn(test_size = 0.1):
     for count, _ in enumerate(range(max_images)):
         print(count)
         try:
-            image, image_gm, masks = next(gen)
-            dfs.append(preprocess_images_for_kmeans(image, masks))
+            image, image_gm, masks, resized_image = next(gen)
+            dfs.append(preprocess_images_for_kmeans(resized_image, masks))
         except StopIteration:
             traceback.print_exc()
             break
@@ -160,62 +144,39 @@ def get_inputs_for_k_means_cnn(test_size = 0.1):
 
 
 def get_cnn():
-
-
     model = Sequential()
+    #model.add(Conv2D(32, (3, 3), input_shape=(32, 32, 1)))
+    model.add(ZeroPadding2D((1,1),input_shape=(32, 32, 2)))
+    model.add(Conv2D(16, (3, 3), activation='elu'))
+    model.add(ZeroPadding2D((1,1)))
+    model.add(Conv2D(16, (3, 3), activation='elu'))
+    model.add(MaxPooling2D((2,2), strides=(2,2)))
 
-    model.add(Conv2D(32, (3, 3), input_shape=(32, 32, 1)))
-    model.add(BatchNormalization(axis=-1))
-    model.add(LeakyReLU())
-    model.add(Conv2D(32, (3, 3)))
-    model.add(BatchNormalization(axis=-1))
-    model.add(LeakyReLU())
-    model.add(MaxPooling2D(pool_size=(3, 3)))
+    model.add(ZeroPadding2D((1,1)))
+    model.add(Conv2D(32, (3, 3), activation='elu'))
+    model.add(ZeroPadding2D((1,1)))
+    model.add(Conv2D(32, (3, 3), activation='elu'))
+    model.add(MaxPooling2D((2,2), strides=(2,2)))
 
-    model.add(Conv2D(32, (3, 3)))
-    model.add(BatchNormalization(axis=-1))
-    model.add(LeakyReLU())
-    model.add(Conv2D(32, (3, 3)))
-    model.add(BatchNormalization(axis=-1))
-    model.add(LeakyReLU())
-    model.add(MaxPooling2D(pool_size=(3, 3)))
+    model.add(ZeroPadding2D((1,1)))
+    model.add(Conv2D(64, (3, 3), activation='elu'))
+    model.add(ZeroPadding2D((1,1)))
+    model.add(Conv2D(64, (3, 3), activation='elu'))
+    model.add(ZeroPadding2D((1,1)))
+    model.add(Conv2D(64, (3, 3), activation='elu'))
+    model.add(ZeroPadding2D((1,1)))
+    model.add(Conv2D(64, (3, 3), activation='elu'))
+    model.add(MaxPooling2D((2,2), strides=(2,2)))
 
-    model.add(Flatten())
-
-    model.add(Dense(512))
-    model.add(BatchNormalization())
-    model.add(LeakyReLU())
-    model.add(Dropout(0.5))
-    model.add(Dense(128))
-    model.add(BatchNormalization())
-    model.add(LeakyReLU())
-    model.add(Dropout(0.5))
-    model.add(Dense(2))
-
-    model.add(Activation('softmax'))
-    sgd = optimizers.SGD(lr=0.5, decay=1e-5, momentum=0.0, nesterov=False)
-    model.compile(loss=keras.losses.binary_crossentropy, optimizer=sgd, metrics=['accuracy'])
-    return model
-
-
-def get_cnn_for_k():
-    model = Sequential()
-
-    model.add(Conv2D(64, (3, 3), input_shape=(256, 256, 1)))
-    model.add(BatchNormalization(axis=-1))
-    model.add(LeakyReLU())
-    model.add(Conv2D(64, (3, 3)))
-    model.add(BatchNormalization(axis=-1))
-    model.add(LeakyReLU())
-    model.add(MaxPooling2D(pool_size=(3, 3)))
-
-    model.add(Conv2D(64, (2, 2)))
-    model.add(BatchNormalization(axis=-1))
-    model.add(LeakyReLU())
-    model.add(Conv2D(64, (2, 2)))
-    model.add(BatchNormalization(axis=-1))
-    model.add(LeakyReLU())
-    model.add(MaxPooling2D(pool_size=(2, 2)))
+    model.add(ZeroPadding2D((1,1)))
+    model.add(Conv2D(128, (3, 3), activation='elu'))
+    model.add(ZeroPadding2D((1,1)))
+    model.add(Conv2D(128, (3, 3), activation='elu'))
+    model.add(ZeroPadding2D((1,1)))
+    model.add(Conv2D(128, (3, 3), activation='elu'))
+    model.add(ZeroPadding2D((1,1)))
+    model.add(Conv2D(128, (3, 3), activation='elu'))
+    model.add(MaxPooling2D((2,2), strides=(2,2)))
 
     model.add(Flatten())
 
@@ -227,16 +188,112 @@ def get_cnn_for_k():
     model.add(BatchNormalization())
     model.add(LeakyReLU())
     model.add(Dropout(0.5))
-    model.add(Dense(128))
+    model.add(Dense(2))
+
+    model.add(Activation('softmax'))
+    sgd = optimizers.SGD(lr=0.01, decay=1e-5, momentum=0.0, nesterov=False)
+    model.compile(loss=keras.losses.binary_crossentropy, optimizer=sgd, metrics=['accuracy'])
+    return model
+
+
+def get_cnn_for_k():
+    model = Sequential()
+
+    #model.add(Conv2D(32, (3, 3), input_shape=(256, 256, 2)))
+    model.add(ZeroPadding2D((1,1),input_shape=(256, 256, 2)))
+    model.add(Conv2D(64, (3, 3), activation='elu'))
+    model.add(ZeroPadding2D((1,1)))
+    model.add(Conv2D(64, (3, 3), activation='elu'))
+    model.add(MaxPooling2D((2,2), strides=(2,2)))
+
+    model.add(ZeroPadding2D((1,1)))
+    model.add(Conv2D(128, (3, 3), activation='elu'))
+    model.add(ZeroPadding2D((1,1)))
+    model.add(Conv2D(128, (3, 3), activation='elu'))
+    model.add(MaxPooling2D((2,2), strides=(2,2)))
+
+    model.add(ZeroPadding2D((1,1)))
+    model.add(Conv2D(256, (3, 3), activation='elu'))
+    model.add(ZeroPadding2D((1,1)))
+    model.add(Conv2D(256, (3, 3), activation='elu'))
+    model.add(ZeroPadding2D((1,1)))
+    model.add(Conv2D(256, (3, 3), activation='elu'))
+    model.add(ZeroPadding2D((1,1)))
+    model.add(Conv2D(256, (3, 3), activation='elu'))
+    model.add(MaxPooling2D((2,2), strides=(2,2)))
+
+    model.add(ZeroPadding2D((1,1)))
+    model.add(Conv2D(512, (3, 3), activation='elu'))
+    model.add(ZeroPadding2D((1,1)))
+    model.add(Conv2D(512, (3, 3), activation='elu'))
+    model.add(ZeroPadding2D((1,1)))
+    model.add(Conv2D(512, (3, 3), activation='elu'))
+    model.add(ZeroPadding2D((1,1)))
+    model.add(Conv2D(512, (3, 3), activation='elu'))
+    model.add(MaxPooling2D((2,2), strides=(2,2)))
+
+    model.add(ZeroPadding2D((1,1)))
+    model.add(Conv2D(512, (3, 3), activation='elu'))
+    model.add(ZeroPadding2D((1,1)))
+    model.add(Conv2D(512, (3, 3), activation='elu'))
+    model.add(ZeroPadding2D((1,1)))
+    model.add(Conv2D(512, (3, 3), activation='elu'))
+    model.add(ZeroPadding2D((1,1)))
+    model.add(Conv2D(512, (3, 3), activation='elu'))
+    model.add(MaxPooling2D((2,2), strides=(2,2)))
+
+    model.add(Flatten())
+
+    model.add(Dense(2048))
+    model.add(BatchNormalization())
+    model.add(LeakyReLU())
+    model.add(Dropout(0.5))
+    model.add(Dense(512))
     model.add(BatchNormalization())
     model.add(LeakyReLU())
     model.add(Dropout(0.5))
     model.add(Dense(1))
 
-    sgd = optimizers.SGD(lr=0.5, decay=1e-5, momentum=0.0, nesterov=False)
-    model.compile(loss=keras.losses.mean_squared_error, optimizer=sgd, metrics=['mae'])
+    sgd = optimizers.SGD(lr=0.001, decay=1e-4, momentum=0.0, nesterov=False)
+    model.compile(loss=keras.losses.mean_squared_logarithmic_error, optimizer=sgd, metrics=['mae'])
     return model
 
+
+def get_image_array(image, np_gradient_image, size, x, y, masks):
+    output_dict = dict()
+    sub_image = np.expand_dims(image[int(x):int(x+size), int(y):int(y+size)], axis = 2)
+    sub_image_gradient = np.expand_dims(np_gradient_image[int(x):int(x+size), int(y):int(y+size)], axis = 2)
+
+    output_dict['image'] = np.dstack([sub_image, sub_image_gradient])
+    output = 0
+    for i in masks:
+        if i[x][y] > 0:
+            output = 1
+    output_dict['output'] = output
+    if output_dict['image'].shape != (size, size, 2):
+        print(x,y,output_dict['image'].shape)
+        return None
+    else:
+        return output_dict
+
+
+def get_image_arrays(image, size, masks):
+    inputs = []
+    result_dicts = []
+
+    adj_image = np.pad(image, size//2, mode='constant')
+    np_gradient_image = gaussian_gradient_magnitude(adj_image, sigma=.4)
+
+    for i in range(image.shape[0]):
+        for j in range(image.shape[1]):
+            inputs.append((i,j))
+    if len(inputs) > sample_per_image:
+        inputs = random.sample(inputs, sample_per_image)
+    for i in inputs:
+        result_dicts.append(
+            get_image_array(adj_image,  np_gradient_image, size, i[0], i[1], masks))
+    result_dicts = [i for i in result_dicts if i]
+    return pd.DataFrame.from_dict(result_dicts)
 
 
 def get_dataframes(square_size):
@@ -246,7 +303,7 @@ def get_dataframes(square_size):
     for count, _ in enumerate(range(max_images)):
         print(count)
         try:
-            image, image_gm, masks = next(gen)
+            image, image_gm, masks, _ = next(gen)
             #dfs.append(create_image_features(image, image_gm, masks, square_size))
             dfs.append(get_image_arrays(image, square_size, masks))
         except StopIteration:
@@ -314,7 +371,7 @@ def get_max_second_order_derivative(x, y):
     return xsecond[max]
 
 
-def get_outputs(model, sub_image_size):
+def get_outputs(model1, mmodel2, sub_image_size):
     folders = glob.glob(files_loc + 'stage1_test/*/')
     random.shuffle(folders)
     output_dicts = []
@@ -325,7 +382,7 @@ def get_outputs(model, sub_image_size):
             print(image_location)
             #mask_locations = glob.glob(folder + 'masks/*')
 
-            image_id = image_location.split('/')[-1].split('.')[0]
+            image_id = os.path.basename(image_location).split('.')[0]
 
             pil_image = Image.open(image_location).convert('LA')
             np_image = np.array(pil_image.getdata())[:, 0]
@@ -344,9 +401,9 @@ def get_outputs(model, sub_image_size):
             sub_image_array = np.array(sub_image_array)
             print(sub_image_array.shape)
 
-            predictions = model.predict(sub_image_array)
+            predictions = model1.predict(sub_image_array)
 
-            confidence_tresholds = [.9]
+            confidence_tresholds = [.5]
             cluster_dataset = []
             for c in confidence_tresholds:
                 preprocessed_image = np_image.copy()
@@ -412,6 +469,7 @@ def get_outputs_from_flat_array(a):
         res_str += ' '
         res_str += str(len(i))
         res_str += ' '
+    res_str = res_str[:-1]
 
 
 
@@ -421,10 +479,7 @@ def get_outputs_from_flat_array(a):
 
 
 def to_output_format(label_dict, np_image, image_name):
-
     output_dicts = []
-
-
     for i in label_dict.keys():
         image_copy = np_image.copy()
         image_copy.fill(0)
@@ -458,15 +513,31 @@ def main():
         model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=5)
         model.save(files_loc + 'cnn1.h5')
 
+    try:
+        model = load_model(files_loc + 'cnn2.h5')
+        print(model)
+    except:
+        try:
+            with open('temp_pickle2.plk', 'rb') as infile:
+                x_train, x_test, y_train, y_test = pickle.load(infile)
+        except:
+            traceback.print_exc()
+            x_train, x_test, y_train, y_test = get_inputs_for_k_means_cnn()
+            with open('temp_pickle2.plk', 'wb') as infile:
+                pickle.dump((x_train, x_test, y_train, y_test),infile)
+        traceback.print_exc()
+        model = get_cnn_for_k()
+
+        model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=10)
+        model.save(files_loc + 'cnn2.h5')
+
     get_outputs(model, 32)
 
 
 
 if __name__ == '__main__':
-    #main()
-    x_train, x_test, y_train, y_test = get_inputs_for_k_means_cnn()
-    model = get_cnn_for_k()
-    model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=5)
+    main()
+
 
 
 
