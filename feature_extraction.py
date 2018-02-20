@@ -24,11 +24,10 @@ import h5py
 import pickle
 
 max_images = 1000
-sample_per_image = 5000
+sample_per_image = 50000
 files_loc = 'C:/Users/tdelforge/Documents/Kaggle_datasets/data_science_bowl/'
 
-k_means_image_size = (256, 256)
-
+k_means_image_size = (128, 128)
 
 def create_directory(directory):
     if not os.path.exists(directory):
@@ -52,7 +51,7 @@ def generate_input_image_and_masks():
             mask_locations = glob.glob(folder + 'masks/*')
             start_image = Image.open(image_location).convert('LA')
             np_image = np.array(start_image.getdata())[:,0]
-            np_image = np_image.reshape(start_image.size[0], start_image.size[1])
+            np_image = np_image.reshape(start_image.size[1], start_image.size[0])
 
             resized_np_image = scipy.misc.imresize(np_image, k_means_image_size)
             # resized_np_image = np.array(start_image.getdata())[:,0]
@@ -65,7 +64,7 @@ def generate_input_image_and_masks():
             for i in mask_locations:
                 mask_image = Image.open(i)
                 np_mask = np.array(mask_image.getdata())
-                np_mask = np_mask.reshape(start_image.size[0], start_image.size[1])
+                np_mask = np_mask.reshape(start_image.size[1], start_image.size[0])
                 masks.append(np_mask)
                 # masks.append(imageio.imread(i))
         except OSError:
@@ -79,20 +78,30 @@ def preprocess_images_for_kmeans(input_image, masks):
     '''
     creates large number of identical but differently preprocessed images to have more inputs
     '''
-    resized_image = input_image
 
-    g_image = gaussian_gradient_magnitude(resized_image, 3)
-    gradients = np.gradient(resized_image)
+    np_image_t = np.transpose(input_image)
+
+    g_image = gaussian_gradient_magnitude(input_image, 3)
+    g_image_t = gaussian_gradient_magnitude(np_image_t, 3)
+
+    input_image = scipy.misc.imresize(input_image, k_means_image_size)
+    np_image_t = scipy.misc.imresize(np_image_t, k_means_image_size)
+    g_image = scipy.misc.imresize(g_image, k_means_image_size)
+    g_image_t = scipy.misc.imresize(g_image_t, k_means_image_size)
 
     #pic_part_list =  [np.expand_dims(i, axis = 2) for i in gradients] + [np.expand_dims(resized_image, axis = 2)] + [np.expand_dims(g_image, axis=2)]
-    pic_part_list = [np.expand_dims(resized_image, axis = 2)] + [np.expand_dims(g_image, axis=2)]
+    pic_part_list = [np.expand_dims(input_image, axis = 2)] + [np.expand_dims(g_image, axis=2)]
+    pic_part_list_t = [np.expand_dims(np_image_t, axis=2)] + [np.expand_dims(g_image_t, axis=2)]
 
     first_image = np.dstack(pic_part_list)
-    print(first_image.shape, len(masks))
+    second_image = np.dstack(pic_part_list_t)
 
     resized_image2 = np.rot90(first_image, 1)
     resized_image3 = np.rot90(first_image, 2)
     resized_image4 = np.rot90(first_image, 3)
+    resized_image2_t = np.rot90(second_image, 1)
+    resized_image3_t = np.rot90(second_image, 2)
+    resized_image4_t = np.rot90(second_image, 3)
 
     num_of_results = len(masks)
     results = []
@@ -100,11 +109,12 @@ def preprocess_images_for_kmeans(input_image, masks):
     results.append({'input': resized_image2, 'output':num_of_results})
     results.append({'input': resized_image3, 'output':num_of_results})
     results.append({'input': resized_image4, 'output':num_of_results})
-
+    results.append({'input': second_image, 'output':num_of_results})
+    results.append({'input': resized_image2_t, 'output':num_of_results})
+    results.append({'input': resized_image3_t, 'output':num_of_results})
+    results.append({'input': resized_image4_t, 'output':num_of_results})
 
     return pd.DataFrame.from_dict(results)
-
-
 
 
 def get_inputs_for_k_means_cnn(test_size = 0.1):
@@ -114,8 +124,8 @@ def get_inputs_for_k_means_cnn(test_size = 0.1):
     for count, _ in enumerate(range(max_images)):
         print(count)
         try:
-            image, image_gm, masks, resized_image = next(gen)
-            dfs.append(preprocess_images_for_kmeans(resized_image, masks))
+            np_image, image_gm, masks, _ = next(gen)
+            dfs.append(preprocess_images_for_kmeans(np_image, masks))
         except StopIteration:
             traceback.print_exc()
             break
@@ -200,7 +210,7 @@ def get_cnn_for_k():
     model = Sequential()
 
     #model.add(Conv2D(32, (3, 3), input_shape=(256, 256, 2)))
-    model.add(ZeroPadding2D((1,1),input_shape=(256, 256, 2)))
+    model.add(ZeroPadding2D((1,1),input_shape=(128, 128, 2)))
     model.add(Conv2D(64, (3, 3), activation='elu'))
     model.add(ZeroPadding2D((1,1)))
     model.add(Conv2D(64, (3, 3), activation='elu'))
@@ -277,6 +287,62 @@ def get_image_array(image, np_gradient_image, size, x, y, masks):
         return output_dict
 
 
+def get_image_array_for_edge_detection(image, np_gradient_image, size, x, y, masks):
+    output_dict = dict()
+    sub_image = image[int(x):int(x+size), int(y):int(y+size)]
+    sub_image = np.expand_dims(sub_image, axis = 2)
+    sub_image_gradient = np.expand_dims(np_gradient_image[int(x):int(x+size), int(y):int(y+size)], axis = 2)
+
+    output_dict['image'] = np.dstack([sub_image, sub_image_gradient])
+    output = 0
+    for i in masks:
+        if i[x,y] > 0:
+            temp_square = i[x-1:x+2, y-1: y+2]
+            if min(temp_square.shape) > 0 and np.mean(temp_square) < np.max(temp_square):
+                output = 1
+            elif min(temp_square.shape) == 0:
+                output = 1
+
+    output_dict['output'] = output
+    if output_dict['image'].shape != (size, size, 2):
+        print(x,y,output_dict['image'].shape)
+        return None
+    else:
+        return output_dict
+
+
+def get_image_arrays_for_edge_detection_training(input_image, size, masks):
+    inputs = []
+    result_dicts = []
+
+    adj_image = np.pad(input_image, size//2, mode='constant')
+    np_gradient_image = gaussian_gradient_magnitude(adj_image, sigma=.4)
+
+    for i in range(input_image.shape[0]):
+        for j in range(input_image.shape[1]):
+            inputs.append((i,j))
+    if len(inputs) > sample_per_image:
+        inputs = random.sample(inputs, sample_per_image)
+    for i in inputs:
+        result_dicts.append(
+            get_image_array_for_edge_detection(adj_image,  np_gradient_image, size, i[0], i[1], masks))
+    result_dicts = [i for i in result_dicts if i]
+
+    df = pd.DataFrame.from_dict(result_dicts)
+
+    try:
+        positive_matches = df[df['output'] > 0]
+        negative_matches = df[df['output'] == 0]
+        negative_matches = negative_matches.sample(n=positive_matches.shape[0])
+        df = pd.concat([positive_matches, negative_matches], ignore_index=True)
+    except:
+        #TODO: handle case with more positives than negatives
+        pass
+    df = df.sample(frac=1)
+
+    return df
+
+
 def get_image_arrays(image, size, masks):
     inputs = []
     result_dicts = []
@@ -293,7 +359,40 @@ def get_image_arrays(image, size, masks):
         result_dicts.append(
             get_image_array(adj_image,  np_gradient_image, size, i[0], i[1], masks))
     result_dicts = [i for i in result_dicts if i]
-    return pd.DataFrame.from_dict(result_dicts)
+
+    df = pd.DataFrame.from_dict(result_dicts)
+
+    try:
+        positive_matches = df[df['output'] > 0]
+        negative_matches = df[df['output'] == 0]
+        negative_matches = negative_matches.sample(n=positive_matches.shape[0])
+        df = pd.concat([positive_matches, negative_matches], ignore_index=True)
+    except:
+        #TODO: handle case with more positives than negatives
+        pass
+    df = df.sample(frac=1)
+
+    return df
+
+
+def get_dataframes_for_edge_detection_training(square_size):
+    gen = generate_input_image_and_masks()
+    dfs = []
+
+    for count, _ in enumerate(range(max_images)):
+        print(count)
+        try:
+            image, image_gm, masks, _ = next(gen)
+            #dfs.append(create_image_features(image, image_gm, masks, square_size))
+            dfs.append(get_image_arrays_for_edge_detection_training(image, square_size, masks))
+        except StopIteration:
+            traceback.print_exc()
+            break
+
+    print('images read')
+    df = pd.concat(dfs, ignore_index=True)
+    df = df.sample(frac=1)
+    return df
 
 
 def get_dataframes(square_size):
@@ -313,12 +412,10 @@ def get_dataframes(square_size):
     print('images read')
     df = pd.concat(dfs, ignore_index=True)
 
-    positive_matches = df[df['output'] > 0]
-    negative_matches = df[df['output'] == 0]
-
-    print(positive_matches.shape, negative_matches.shape)
-    negative_matches = negative_matches.sample(n=positive_matches.shape[0])
-    df = pd.concat([positive_matches, negative_matches], ignore_index=True)
+    # positive_matches = df[df['output'] > 0]
+    # negative_matches = df[df['output'] == 0]
+    # negative_matches = negative_matches.sample(n=positive_matches.shape[0])
+    # df = pd.concat([positive_matches, negative_matches], ignore_index=True)
     df = df.sample(frac=1)
     return df
 
@@ -326,12 +423,12 @@ def get_dataframes(square_size):
 def get_model_inputs(df, x_labels=['image'], test_size = 0.01):
     print('testing inputs: {0}'.format(x_labels))
     x, y = [], []
+
+    #TODO: vectorize
     for _, i in df.iterrows():
         x.append(np.hstack([i[x_label] for x_label in x_labels]))
         #x.append(np.hstack([i['image'], i['general_image_stats']]))
         y.append(i['output'])
-
-
 
     x = np.array(x)
     y = np.vstack(y)
@@ -497,11 +594,11 @@ def to_output_format(label_dict, np_image, image_name):
 
 def main():
     try:
-        model = load_model(files_loc + 'cnn1.h5')
+        model = load_model(files_loc + 'cnn3.h5')
         print(model)
     except:
         traceback.print_exc()
-        df = get_dataframes(32)
+        df = get_dataframes_for_edge_detection_training(32)
         x_train, x_test, y_train, y_test = get_model_inputs(df, x_labels=['image'])
         #train_models(x_train, x_test, y_train, y_test)
 
@@ -511,25 +608,40 @@ def main():
         y_test = keras.utils.to_categorical(y_test, 2)
 
         model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=5)
-        model.save(files_loc + 'cnn1.h5')
+        model.save(files_loc + 'cnn3.h5')
 
-    try:
-        model = load_model(files_loc + 'cnn2.h5')
-        print(model)
-    except:
-        try:
-            with open('temp_pickle2.plk', 'rb') as infile:
-                x_train, x_test, y_train, y_test = pickle.load(infile)
-        except:
-            traceback.print_exc()
-            x_train, x_test, y_train, y_test = get_inputs_for_k_means_cnn()
-            with open('temp_pickle2.plk', 'wb') as infile:
-                pickle.dump((x_train, x_test, y_train, y_test),infile)
-        traceback.print_exc()
-        model = get_cnn_for_k()
 
-        model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=10)
-        model.save(files_loc + 'cnn2.h5')
+    # try:
+    #     model = load_model(files_loc + 'cnn1.h5')
+    #     print(model)
+    # except:
+    #     traceback.print_exc()
+    #     df = get_dataframes(32)
+    #     x_train, x_test, y_train, y_test = get_model_inputs(df, x_labels=['image'])
+    #     #train_models(x_train, x_test, y_train, y_test)
+    #
+    #     model = get_cnn()
+    #
+    #     y_train = keras.utils.to_categorical(y_train, 2)
+    #     y_test = keras.utils.to_categorical(y_test, 2)
+    #
+    #     model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=1)
+    #     model.save(files_loc + 'cnn1.h5')
+
+    # try:
+    #     raise Exception()
+    #     model = load_model(files_loc + 'cnn2.h5')
+    #     print(model)
+    # except:
+    #     traceback.print_exc()
+    #     x_train, x_test, y_train, y_test = get_inputs_for_k_means_cnn()
+    #
+    #     traceback.print_exc()
+    #     #model = get_cnn_for_k()
+    #     model = load_model(files_loc + 'cnn2.h5')
+    #
+    #     model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=25)
+    #     model.save(files_loc + 'cnn2.h5')
 
     get_outputs(model, 32)
 
