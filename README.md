@@ -3,22 +3,5 @@
 
 
 
-gameplan:
-Train models to determine if pixel is neuclei.
-Build map of predicted neuclei.
-Build splitting algorithm to get logical neuclei.
-
-
-Done:
-Basic model based on image and image gradient, ~80% accuracy for determining if pixel is part of neuclei.
-
-to do:
-look into extracting image metadata as fetures.
-vectorize feature extraction
-
-experiment with:
-    experiment with larger tf convolutional nn,
-    other nan replacement,
-    different input feature sizes,
-    stacked models and other model types
-
+started by predicting if a pixel was part of a neuclie then clustering. Clustering did not work well. <br />
+Attempting to train 2 models, 1 to predict edges, 1 to predict neuclie. This should make the last clustering step easier. Will try clustering both with kmeans and graph cover algorithms.<br />

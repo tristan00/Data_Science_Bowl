@@ -212,7 +212,7 @@ def get_location_detection_model():
         y_train = keras.utils.to_categorical(y_train, 2)
         y_test = keras.utils.to_categorical(y_test, 2)
 
-        model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=4)
+        model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=2)
         model.save(files_loc + 'cnn_location.h5')
     return model
 
@@ -308,7 +308,7 @@ def get_edge_detection_model():
         y_train = keras.utils.to_categorical(y_train, 2)
         y_test = keras.utils.to_categorical(y_test, 2)
 
-        model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=5)
+        model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=2)
         model.save(files_loc + 'cnn_edge.h5')
     return model
 
