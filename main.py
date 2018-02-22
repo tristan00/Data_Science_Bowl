@@ -29,6 +29,7 @@ sample_per_image_edge_model= 60000
 files_loc = 'C:/Users/tdelforge/Documents/Kaggle_datasets/data_science_bowl/'
 
 k_means_image_size = (128, 128)
+min_nuclei_size = 10
 
 
 def create_directory(directory):
@@ -228,9 +229,7 @@ def get_image_array_for_edge_detection(image, np_gradient_image, size, x, y, mas
     for i in masks:
         if i[x,y] == 0:
             temp_square = i[x-1:x+2, y-1: y+2]
-            if min(temp_square.shape) > 0 and np.mean(temp_square) > np.max(temp_square):
-                output = 1
-            elif min(temp_square.shape) == 0:
+            if min(temp_square.shape) == 3 and (temp_square[0,1] > 0 or temp_square[1,0] > 0 or temp_square[2,1] > 0 or temp_square[1,2] > 0):
                 output = 1
 
     output_dict['output'] = output
@@ -266,6 +265,7 @@ def get_image_arrays_for_edge_detection_training(input_image, size, masks):
         negative_matches = negative_matches.sample(n=positive_matches.shape[0])
         df = pd.concat([positive_matches, negative_matches], ignore_index=True)
     except:
+        traceback.print_exc()
         #TODO: handle case with more positives than negatives
         pass
     df = df.sample(frac=1)
@@ -344,11 +344,101 @@ def get_model_inputs(df, x_labels=['image'], test_size = 0.01):
     return x_train, x_test, y_train, y_test
 
 
-def extract_solutions_from_edges():
-    pass
+def get_outputs_from_flat_array(a):
+    on_label = False
+
+    image_list = []
+    temp_image_list = []
+    for count, i in enumerate(a):
+        if i != 0 and not on_label:
+            temp_image_list = []
+            temp_image_list.append(count)
+            on_label = True
+        elif i != 0 and on_label:
+            temp_image_list.append(count)
+        elif i == 0 and on_label:
+            on_label = False
+            image_list.append(temp_image_list)
+
+    res_str = ''
+    for i in image_list:
+        res_str += str(int(i[0]))
+        res_str += ' '
+        res_str += str(len(i))
+        res_str += ' '
+    res_str = res_str[:-1]
 
 
-def get_predictions(model1, sub_image_size):
+
+    return res_str
+
+
+
+def to_output_format(label_dict, np_image, image_name):
+    output_dicts = []
+    for i in label_dict:
+        image_copy = np_image.copy()
+        image_copy.fill(0)
+        for j in i:
+            image_copy[j[0], j[1]] = 1
+
+        flat_image = image_copy.flatten()
+
+        output_dict = dict()
+        output_dict['ImageId'] = image_name
+        output_dict['EncodedPixels'] = get_outputs_from_flat_array(flat_image)
+        output_dicts.append(output_dict)
+    return output_dicts
+
+
+
+def get_nuclei_from_predictions(locations):
+    location_set = set(locations)
+    prediction_n_locations = location_set
+    nuclei_predictions = []
+
+    while len(prediction_n_locations) > 0:
+        starting_location = prediction_n_locations.pop()
+        prediction_n_locations.add(starting_location)
+
+        temp_neucli_locations = [starting_location]
+
+
+
+        while True:
+            location_added = False
+
+            for n_loc in temp_neucli_locations:
+                if (n_loc[0] + 1, n_loc[1]) in prediction_n_locations and (n_loc[0] + 1, n_loc[1]) not in temp_neucli_locations:
+                    temp_neucli_locations.append((n_loc[0] + 1, n_loc[1]))
+                    location_added = True
+                    break
+                if (n_loc[0] - 1, n_loc[1]) in prediction_n_locations and (n_loc[0] - 1, n_loc[1]) not in temp_neucli_locations:
+                    temp_neucli_locations.append((n_loc[0] - 1, n_loc[1]))
+                    location_added = True
+                    break
+                if (n_loc[0], n_loc[1] + 1) in prediction_n_locations and (n_loc[0], n_loc[1] + 1) not in temp_neucli_locations:
+                    temp_neucli_locations.append((n_loc[0], n_loc[1] + 1))
+                    location_added = True
+                    break
+                if (n_loc[0], n_loc[1] - 1) in prediction_n_locations and (n_loc[0], n_loc[1] - 1) not in temp_neucli_locations:
+                    temp_neucli_locations.append((n_loc[0], n_loc[1] - 1))
+                    location_added = True
+                    break
+            if not location_added:
+                break
+        for i in temp_neucli_locations:
+            prediction_n_locations.remove(i)
+        print('cluster found', ', len of predicted spots left:', len(prediction_n_locations))
+        if len(temp_neucli_locations)  > min_nuclei_size:
+            nuclei_predictions.append(temp_neucli_locations)
+    return nuclei_predictions
+
+
+
+
+
+def get_predictions(location_model, edge_model, sub_image_size):
     folders = glob.glob(files_loc + 'stage1_test/*/')
     random.shuffle(folders)
     output_dicts = []
@@ -384,38 +474,71 @@ def get_predictions(model1, sub_image_size):
             sub_image_array = np.array(sub_image_array)
             print(sub_image_array.shape)
 
-            predictions = model1.predict(sub_image_array)
+
+            location_predictions = location_model.predict(sub_image_array)
+            #edge_predictions = edge_model.predict(sub_image_array)
 
             confidence_tresholds = [.5]
             cluster_dataset = []
             for c in confidence_tresholds:
-                preprocessed_image = np_image.copy()
-                for count, prediction in enumerate(predictions):
+                location_image, edge_image = np_image.copy(), np_image.copy()
+                for count, location_prediction in enumerate(location_predictions):
                     x = count%np_image.shape[1]
                     y = count//np_image.shape[1]
-                    if prediction[1] > c:
-                        preprocessed_image[y,x] = 255
-                        cluster_dataset.append(np.array([x, y]))
-                    else:
-                        preprocessed_image[y, x] = 0
-                scipy.misc.imsave('preprocessed_file_{0}.jpg'.format(str(int(c*100))), preprocessed_image)
-                scipy.misc.imsave('starting_file_{0}.jpg'.format(str(int(c*100))), np_image)
 
+                    if location_prediction[1] > c:
+                        location_image[y,x] = 255
+                        cluster_dataset.append((x, y))
+                    else:
+                        location_image[y, x] = 0
+
+                    # if edge_prediction[1] > c:
+                    #     edge_image[y,x] = 255
+                    #     cluster_dataset.append(np.array([x, y]))
+                    # else:
+                    #     edge_image[y, x] = 0
+
+                scipy.misc.imsave('location_image_{0}.jpg'.format(str(int(c * 100))), location_image)
+                scipy.misc.imsave('starting_file_{0}.jpg'.format(str(int(c*100))), np_image)
+                # with open('temp_cluster.plk', 'wb') as infile:
+                #     pickle.dump(cluster_dataset, infile)
+                # with open('image_id.plk', 'wb') as infile:
+                #     pickle.dump(image_id, infile)
+                # with open('np_image.plk', 'wb') as infile:
+                #     pickle.dump(np_image, infile)
+
+                print('predicting clusters')
+                clusters = get_nuclei_from_predictions(cluster_dataset)
+                output_dicts.extend(to_output_format(clusters, np_image, image_id))
 
 
         except:
             traceback.print_exc()
 
     df = pd.DataFrame.from_dict(output_dicts)
-    df.to_csv(files_loc + 'output.csv', index = False)
+    df.to_csv('output.csv', index = False)
 
 
 def main():
-    model2 = get_location_detection_model()
-    model1 = get_edge_detection_model()
+    location_model = get_location_detection_model()
+    edge_model = get_edge_detection_model()
 
-    #get_predictions(model2, 32)
+    get_predictions(location_model, edge_model, 32)
 
 
 if __name__ == '__main__':
     main()
+
+
+    # with open('temp_cluster.plk', 'rb') as infile:
+    #     cluster_dataset = pickle.load(infile)
+    # with open('image_id.plk', 'rb') as infile:
+    #     image_id = pickle.load(infile)
+    # with open('np_image.plk', 'rb') as infile:
+    #     np_image = pickle.load(infile)
+    # clusters = get_nuclei_from_predictions(cluster_dataset)
+    #
+    # output_dicts = to_output_format(clusters, np_image, image_id)
+    # df = pd.DataFrame.from_dict(output_dicts)
+    # df.to_csv('output.csv', index=False)
+
