@@ -602,8 +602,18 @@ def get_nuclei_from_predictions(locations, image_id):
 
 def get_outputs(input_dict):
     locations, np_image, image_id = input_dict['clusters'], input_dict['np_image'], input_dict['image_id']
+    prediction_image_to_location_list
     clusters = get_nuclei_from_predictions(locations, image_id)
     return to_output_format(clusters, np_image, image_id)
+
+
+def prediction_image_to_location_list(prediction_image):
+    output = []
+    for i in prediction_image.shape[0]:
+        for j in prediction_image[1]:
+            if prediction_image[i,j] > 0:
+                output.append((i,j))
+    return output
 
 
 def get_predictions(location_model, edge_model, sub_image_size):

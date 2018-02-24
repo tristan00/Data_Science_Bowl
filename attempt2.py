@@ -1,50 +1,24 @@
 import pandas as pd
 import glob
 from PIL import Image
-from keras.layers.core import Dense, Dropout, Activation, Flatten
-from keras.layers.normalization import BatchNormalization
-from keras.layers import Conv2D, MaxPooling2D, ZeroPadding2D, GlobalAveragePooling2D, LeakyReLU, Convolution2D
-from keras.models import load_model
 import numpy as np
-from sklearn.cluster import AffinityPropagation, KMeans, AgglomerativeClustering, SpectralClustering
 import random
-from keras.layers.core import Layer, Dense, Dropout, Activation, Flatten, Reshape, Permute
-from keras.layers.convolutional import Conv2D, Conv2DTranspose
-from keras import losses
-import scipy.misc
-from keras import optimizers
-import shutil
-import multiprocessing
 import functools
 import operator
-import os
 import traceback
 from scipy.ndimage import gaussian_gradient_magnitude
-from sklearn.feature_extraction import image
-from sklearn.cluster import spectral_clustering
-from scipy import misc
-import keras
-from keras.models import Sequential
-from keras.layers import Dense
-import h5py
-import cv2
 import tensorflow as tf
-import pickle
-from keras.layers.core import Dropout, Lambda
 from keras.models import Model, load_model
 from keras.layers.core import Dropout, Lambda
 from keras.layers.convolutional import Conv2D, Conv2DTranspose
 from keras.layers.merge import concatenate
-from keras.callbacks import EarlyStopping, ModelCheckpoint
 from keras import backend as K
 from keras.layers import Input
 from keras.layers.core import Layer, Dense, Dropout, Activation, Flatten, Reshape, Permute
+import os
 from keras.layers.convolutional import Convolution2D, MaxPooling2D, UpSampling2D, ZeroPadding2D
-from keras.layers.normalization import BatchNormalization
-from keras.utils import np_utils
-from skimage.transform import resize
 
-
+confidence_threshold = .5
 max_images = 1000
 sample_per_image_location_model= 5000
 sample_per_image_edge_model= 60000
@@ -168,9 +142,9 @@ def get_subimages(input_image, gradient, input_mask, max_subimages, transpose = 
             y2 = (1+j)*full_image_read_size[0]
 
 
-            output.append({'input':np.dstack((np.expand_dims(np.transpose(input_image[x1:x2,y1:y2]), axis=2),
-                                             np.expand_dims(np.transpose(input_gradient[x1:x2,y1:y2]), axis=2))),
-                           'output':np.expand_dims(np.transpose(input_mask[x1:x2,y1:y2]), axis=2)})
+            output.append({'input':np.dstack((np.expand_dims(input_image[x1:x2,y1:y2], axis=2),
+                                             np.expand_dims(input_gradient[x1:x2,y1:y2], axis=2))),
+                           'output':np.expand_dims(input_mask[x1:x2,y1:y2], axis=2)})
     return output
 
 
@@ -203,8 +177,22 @@ def get_image_arrays_for_full_edge_training(input_image, masks):
 
     gradient = gaussian_gradient_magnitude(input_image, sigma=.4)
 
-    masks = [gaussian_gradient_magnitude(i, sigma=.4) for i in masks]
-    mask_sum = functools.reduce(operator.add, masks)
+    # masks = [gaussian_gradient_magnitude(i, sigma=.4) for i in masks]
+    # mask_sum = functools.reduce(operator.add, masks)
+
+    mask_sum = input_image.copy()
+    mask_sum[:] = 0
+
+    for i in range(input_image.shape[0]):
+        for j in range(input_image.shape[1]):
+            for m in masks:
+                if m[i, j] == 0:
+                    small_mask = m[i - 1:i + 2, j - 1: j + 2]
+                    if min(small_mask.shape) > 0 and np.max(small_mask) > 0:
+                        mask_sum[i,j] = 1
+
+
+
     vectorized = np.vectorize(lambda t: 1 if t>0 else 0)
     mask_sum = vectorized(mask_sum)
 
@@ -263,7 +251,7 @@ def get_dataframes_for_training_edge():
     return edge_df
 
 
-def get_model_inputs(df, x_labels, test_size = 0.1):
+def get_model_inputs(df, x_labels, test_size = 0.05):
     print('testing inputs: {0}'.format(x_labels))
     x, y = [], []
 
@@ -291,53 +279,218 @@ def get_model_inputs(df, x_labels, test_size = 0.1):
     return x_train, x_test, y_train, y_test
 
 
-def get_models():
+def get_loc_model():
     try:
         loc_model = load_model(files_loc + 'cnn_full_loc.h5', custom_objects={'mean_iou': mean_iou})
-        edge_model = load_model(files_loc + 'cnn_full_edge.h5', custom_objects={'mean_iou': mean_iou})
     except:
         traceback.print_exc()
         df_loc = get_dataframes_for_training_location()
 
         x_train, x_test, y_train, y_test = get_model_inputs(df_loc, x_labels=['input'])
         loc_model = get_cnn()
-        loc_model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=3)
+        loc_model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=5)
         loc_model.save(files_loc + 'cnn_full_loc.h5')
-        del df_loc
+    return loc_model
+
+
+def get_edge_model():
+    return None
+    try:
+        edge_model = load_model(files_loc + 'cnn_full_edge.h5', custom_objects={'mean_iou': mean_iou})
+    except:
+        traceback.print_exc()
 
         df_edge = get_dataframes_for_training_edge()
         x_train, x_test, y_train, y_test = get_model_inputs(df_edge, x_labels=['input'])
         edge_model = get_cnn()
-        edge_model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=3)
+        edge_model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=2)
         edge_model.save(files_loc + 'cnn_full_edge.h5')
-    return loc_model, edge_model
+    return edge_model
 
 
+def get_outputs_from_flat_array(a):
+    on_label = False
 
-def combine_predictions():
-    pass
+    image_list = []
+    temp_image_list = []
+    for count, i in enumerate(a):
+        if i != 0 and not on_label:
+            temp_image_list = []
+            temp_image_list.append(count)
+            on_label = True
+        elif i != 0 and on_label:
+            temp_image_list.append(count)
+        elif i == 0 and on_label:
+            on_label = False
+            image_list.append(temp_image_list)
+
+    res_str = ''
+    for i in image_list:
+        res_str += str(int(i[0]))
+        res_str += ' '
+        res_str += str(len(i))
+        res_str += ' '
+    res_str = res_str[:-1]
+
+    return res_str
 
 
-def predict_subimages(input_image, gradient, input_mask, max_subimages, transpose, rotation, loc_model, edge_model):
+def to_output_format(label_dict, np_image, image_name):
+    output_dicts = []
+    for count, i in enumerate(label_dict):
+        image_copy = np_image.copy()
+        image_copy.fill(0)
+        for j in i:
+            image_copy[j[0], j[1]] = 1
+        image_copy = np.transpose(image_copy)
+        flat_image = image_copy.flatten()
+
+        output_dict = dict()
+        output_dict['ImageId'] = image_name
+        output_dict['EncodedPixels'] = get_outputs_from_flat_array(flat_image)
+        output_dicts.append(output_dict)
+        print('output created:', count, image_name)
+    return output_dicts
+
+
+def get_nuclei_from_predictions(locations, image_id):
+    location_set = set(locations)
+    prediction_n_locations = location_set
+    nuclei_predictions = []
+
+    while len(prediction_n_locations) > 0:
+        starting_location = prediction_n_locations.pop()
+        prediction_n_locations.add(starting_location)
+
+        temp_neucli_locations = set([starting_location])
+        failed_locations = set()
+
+        while True:
+            location_added = False
+
+            search_set = temp_neucli_locations - failed_locations
+
+            for n_loc in search_set:
+                if (n_loc[0] + 1, n_loc[1]) in prediction_n_locations and (n_loc[0] + 1, n_loc[1]) not in temp_neucli_locations:
+                    temp_neucli_locations.add((n_loc[0] + 1, n_loc[1]))
+                    location_added = True
+                if (n_loc[0] - 1, n_loc[1]) in prediction_n_locations and (n_loc[0] - 1, n_loc[1]) not in temp_neucli_locations:
+                    temp_neucli_locations.add((n_loc[0] - 1, n_loc[1]))
+                    location_added = True
+                if (n_loc[0], n_loc[1] + 1) in prediction_n_locations and (n_loc[0], n_loc[1] + 1) not in temp_neucli_locations:
+                    temp_neucli_locations.add((n_loc[0], n_loc[1] + 1))
+                    location_added = True
+                if (n_loc[0], n_loc[1] - 1) in prediction_n_locations and (n_loc[0], n_loc[1] - 1) not in temp_neucli_locations:
+                    temp_neucli_locations.add((n_loc[0], n_loc[1] - 1))
+                    location_added = True
+                failed_locations.add(n_loc)
+            if not location_added:
+                break
+        for i in temp_neucli_locations:
+            prediction_n_locations.remove(i)
+        nuclei_predictions.append(temp_neucli_locations)
+        print('clusters found:', len(nuclei_predictions), ' pixels_left:', len(prediction_n_locations),image_id)
+    return nuclei_predictions
+
+
+def prediction_image_to_location_list(prediction_image):
+    output = []
+    for i in range(prediction_image.shape[0]):
+        for j in range(prediction_image.shape[1]):
+            if prediction_image[i,j] > 0:
+                output.append((i,j))
+    return output
+
+
+def get_outputs(input_dict):
+    output, np_image, image_id = input_dict['output'], input_dict['np_image'], input_dict['image_id']
+    locations = prediction_image_to_location_list(output)
+    clusters = get_nuclei_from_predictions(locations, image_id)
+    return to_output_format(clusters, np_image, image_id)
+
+
+def predict_subimages(input_image, gradient, max_subimages, transpose, rotation, loc_model, edge_model):
     if transpose:
         input_image = np.transpose(input_image)
-        input_mask = np.transpose(input_mask)
         gradient = np.transpose(gradient)
     input_image = np.rot90(input_image, rotation)
-    input_mask = np.rot90(input_mask, rotation)
     input_gradient = np.rot90(gradient, rotation)
 
+    output = []
+    for i in range(max_subimages):
+        predictions = []
+        for j in range(max_subimages):
+            x1 = i * full_image_read_size[0]
+            x2 = (1 + i) * full_image_read_size[0]
+            y1 = j * full_image_read_size[0]
+            y2 = (1 + j) * full_image_read_size[0]
+            temp_image = input_image[x1:x2,y1:y2]
+            temp_gradient = input_gradient[x1:x2,y1:y2]
+            model_input = np.dstack([np.expand_dims(temp_image, axis=2), np.expand_dims(temp_gradient, axis=2)])
+            model_input = np.expand_dims(model_input, axis = 0)
+            prediction = loc_model.predict(model_input)
+            prediction = np.squeeze(prediction)
+            predictions.append(prediction)
+        output.append(np.concatenate(predictions, 1))
+    output = np.concatenate(output, 0)
+    pad = np.zeros(input_image.shape)
+    pad[:] = np.nan
+    pad[:output.shape[0],:output.shape[1]] = output
+    output = pad
+
+    rotated_output = np.rot90(output, 4-rotation)
+
+    return rotated_output
 
 
-
-def predict_image(loc_model, edge_model, np_image):
+def predict_image(loc_model, edge_model, np_image, image_id):
     image_gradient = gaussian_gradient_magnitude(np_image, sigma=.4)
+    max_subimages = (min(np_image.shape)) // min(full_image_read_size)
 
+    results = []
+    results.append(predict_subimages(np_image, image_gradient, max_subimages, False, 0, loc_model, edge_model))
+    results.append(predict_subimages(np_image, image_gradient, max_subimages, False, 1, loc_model, edge_model))
+    results.append(predict_subimages(np_image, image_gradient, max_subimages, False, 2, loc_model, edge_model))
+    results.append(predict_subimages(np_image, image_gradient, max_subimages, False, 3, loc_model, edge_model))
+    result_array = np.dstack(results)
+
+    mean = np.nanmean(result_array, 2)
+    print(mean.shape)
+
+    mean_bool = mean > confidence_threshold
+    prediction_locations = mean_bool.astype(int)
+    input_dict = {'output':prediction_locations, 'image_id':image_id, 'np_image':np_image}
+
+    output_dicts = []
+    output_dicts.extend(get_outputs(input_dict))
+    return output_dicts
+
+
+
+
+def run_predictions(loc_model, edge_model):
+    folders = glob.glob(files_loc + 'stage1_train/*/')
+    random.shuffle(folders)
+
+    output_dicts = []
+
+    for folder in folders:
+        image_location = glob.glob(folder + 'images/*')[0]
+        start_image = Image.open(image_location).convert('LA')
+        image_id = os.path.basename(image_location).split('.')[0]
+        np_image = np.array(start_image.getdata())[:, 0]
+        np_image = np_image.reshape(start_image.size[1], start_image.size[0])
+        output_dicts.extend(predict_image(loc_model, edge_model, np_image, image_id))
+
+    df = pd.DataFrame.from_dict(output_dicts)
+    df.to_csv('output.csv', index = False)
 
 
 
 def main():
-    loc_model, edge_model = get_models()
+    edge_model = get_edge_model()
+    loc_model = get_loc_model()
+    run_predictions(loc_model, edge_model)
 
 
 if __name__ == '__main__':
