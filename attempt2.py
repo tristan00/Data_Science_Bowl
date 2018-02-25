@@ -8,7 +8,8 @@ import operator
 import keras.utils
 import traceback
 import multiprocessing
-from scipy.ndimage import gaussian_gradient_magnitude
+from scipy.ndimage import gaussian_gradient_magnitude, morphology
+from scipy.ndimage.morphology import binary_opening
 import tensorflow as tf
 from keras.models import Model, load_model
 from keras.layers.core import Dropout, Lambda
@@ -415,12 +416,6 @@ def prediction_image_to_location_list(prediction_image):
     return output
 
 
-def get_outputs(input_dict):
-    output, np_image, image_id = input_dict['output_n'], input_dict['np_image'], input_dict['image_id']
-    locations = prediction_image_to_location_list(output)
-    clusters = get_nuclei_from_predictions(locations, image_id)
-    return to_output_format(clusters, np_image, image_id)
-
 #svm was too slow, trying et
 def train_cluster_model(clusters, e_locations):
     x = []
@@ -428,11 +423,18 @@ def train_cluster_model(clusters, e_locations):
     print('classifying {0} unclustered pixels'.format(len(e_locations)))
 
     for i in clusters.keys():
+
+        #duplicating record for consistent sample size, also
+        if len(clusters[i]) == 1:
+            for j in clusters[i]:
+                x.append(np.array([j[0],j[1], j[0]/(j[1] + 1), j[1]/(j[0] + 1)]))
+                y.append(np.array([int(i)]))
         for j in clusters[i]:
-            x.append(np.array([j[0],j[1], j[0]/(j[1] + 1), j[1]/(j[0] + 1)]))
+            x.append(np.array([j[0], j[1], j[0] / (j[1] + 1), j[1] / (j[0] + 1)]))
             y.append(np.array([int(i)]))
     x = np.array(x)
     y = np.array(y)
+    y = np.ravel(y)
 
     #x1,x2,y1,y2 = train_test_split(x, y, shuffle=True)
 
@@ -450,18 +452,28 @@ def train_cluster_model(clusters, e_locations):
 
     return clusters
 
+
+def get_outputs(input_dict):
+    output, np_image, image_id = input_dict['output_n'], input_dict['np_image'], input_dict['image_id']
+    locations = prediction_image_to_location_list(output)
+    clusters = get_nuclei_from_predictions(locations, image_id)
+    return to_output_format(clusters, np_image, image_id)
+
+
 #expirementing with classifying edge pixels
 def get_outputs2(input_dict):
     output, edges, np_image, image_id = input_dict['output_n'], input_dict['edges'], input_dict['np_image'], input_dict['image_id']
+    not_f = np.vectorize(lambda t: 0 if t > 0 else 1)
 
-    not_edge_f = np.vectorize(lambda t: 0 if t > 0 else 1)
-    not_edge = not_edge_f(edges)
+    split_output = binary_opening(output, iterations=5)
+    agreed_output = np.multiply(output, split_output)
+    not_edge = not_f(edges)
+    nuclei_not_edge = np.multiply(agreed_output, not_edge)
 
-    nuclei_not_edge = np.multiply(output, not_edge)
     n_locations = prediction_image_to_location_list(nuclei_not_edge)
-    e_locations = prediction_image_to_location_list(edges)
+    t_locations = prediction_image_to_location_list(output)
     clusters = get_nuclei_from_predictions(n_locations, image_id)
-    clusters = train_cluster_model(clusters, e_locations)
+    clusters = train_cluster_model(clusters, t_locations)
 
     return to_output_format(clusters, np_image, image_id)
 
