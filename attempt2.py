@@ -13,6 +13,8 @@ import tensorflow as tf
 from keras.models import Model, load_model
 from keras.layers.core import Dropout, Lambda
 from keras.layers.convolutional import Conv2D, Conv2DTranspose
+from sklearn.ensemble import ExtraTreesClassifier
+from sklearn.model_selection import train_test_split
 from keras.layers.merge import concatenate
 from keras import backend as K
 from keras.layers import Input
@@ -419,7 +421,7 @@ def get_outputs(input_dict):
     clusters = get_nuclei_from_predictions(locations, image_id)
     return to_output_format(clusters, np_image, image_id)
 
-
+#svm was too slow, trying et
 def train_cluster_model(clusters, e_locations):
     x = []
     y = []
@@ -427,18 +429,21 @@ def train_cluster_model(clusters, e_locations):
 
     for i in clusters.keys():
         for j in clusters[i]:
-            x.append(np.array([j[0], j[1]]))
-            y.append(np.array([i]))
+            x.append(np.array([j[0],j[1], j[0]/(j[1] + 1), j[1]/(j[0] + 1)]))
+            y.append(np.array([int(i)]))
     x = np.array(x)
     y = np.array(y)
 
+    #x1,x2,y1,y2 = train_test_split(x, y, shuffle=True)
+
     pred_x = []
     for i in e_locations:
-        pred_x.append(np.array([i[0], i[1]]))
+        pred_x.append(np.array([i[0], i[1], i[0]/(i[1] + 1), i[1]/(i[0] + 1)]))
     pred_x = np.array(pred_x)
 
-    clf = SVC()
+    clf = ExtraTreesClassifier()
     clf.fit(x, y)
+    #print(clf.score(x2,y2))
     predictions = clf.predict(pred_x)
     for i, j in zip(e_locations, predictions):
         clusters[j].add(i)
