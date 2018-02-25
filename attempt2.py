@@ -52,6 +52,14 @@ def mean_iou(y_true, y_pred):
     return K.mean(K.stack(prec), axis=0)
 
 
+#TODO: change to unit variance and 0 mean
+def normalize_image(np_image):
+    if np.median(np_image) > 128:
+        flip_f = np.vectorize(lambda t: 255-t)
+        np_image = flip_f(np_image)
+    return np_image
+
+
 #taken from https://www.kaggle.com/keegil/keras-u-net-starter-lb-0-277
 def get_cnn():
     inputs = Input((full_image_read_size[0], full_image_read_size[1], 2))
@@ -166,9 +174,7 @@ def get_subimages(input_image, gradient, input_mask, transpose = False, rotation
 
 
 def get_image_arrays_for_full_location_training(input_image, masks):
-    max_subimages = (min(input_image.shape))//min(full_image_read_size)
-    for i in range(max_subimages):
-        pass
+    input_image = normalize_image(input_image)
 
     gradient = gaussian_gradient_magnitude(input_image, sigma=.4)
 
@@ -191,6 +197,7 @@ def get_image_arrays_for_full_location_training(input_image, masks):
 
 def get_image_arrays_for_full_edge_training(tuple_input):
     input_image, masks = tuple_input
+    input_image = normalize_image(input_image)
     print(input_image.shape)
 
     gradient = gaussian_gradient_magnitude(input_image, sigma=.4)
@@ -363,6 +370,49 @@ def to_output_format(label_dict, np_image, image_name):
     return output_dicts
 
 
+def get_valid_pixels(locations):
+    location_set = set(locations)
+    prediction_n_locations = location_set
+    valid_locations = set()
+
+    counter = 0
+    while len(prediction_n_locations) > 0:
+        starting_location = prediction_n_locations.pop()
+        prediction_n_locations.add(starting_location)
+
+        temp_neucli_locations = set([starting_location])
+        failed_locations = set()
+
+        while True:
+            location_added = False
+
+            search_set = temp_neucli_locations - failed_locations
+
+            for n_loc in search_set:
+                if (n_loc[0] + 1, n_loc[1]) in prediction_n_locations and (n_loc[0] + 1, n_loc[1]) not in temp_neucli_locations:
+                    temp_neucli_locations.add((n_loc[0] + 1, n_loc[1]))
+                    location_added = True
+                if (n_loc[0] - 1, n_loc[1]) in prediction_n_locations and (n_loc[0] - 1, n_loc[1]) not in temp_neucli_locations:
+                    temp_neucli_locations.add((n_loc[0] - 1, n_loc[1]))
+                    location_added = True
+                if (n_loc[0], n_loc[1] + 1) in prediction_n_locations and (n_loc[0], n_loc[1] + 1) not in temp_neucli_locations:
+                    temp_neucli_locations.add((n_loc[0], n_loc[1] + 1))
+                    location_added = True
+                if (n_loc[0], n_loc[1] - 1) in prediction_n_locations and (n_loc[0], n_loc[1] - 1) not in temp_neucli_locations:
+                    temp_neucli_locations.add((n_loc[0], n_loc[1] - 1))
+                    location_added = True
+                failed_locations.add(n_loc)
+            if not location_added:
+                break
+        for i in temp_neucli_locations:
+            prediction_n_locations.remove(i)
+        if len(temp_neucli_locations) >= min_nuclei_size or len(valid_locations) == 0:
+            valid_locations.update(temp_neucli_locations)
+            counter += 1
+
+    return valid_locations
+
+
 def get_nuclei_from_predictions(locations, image_id):
     location_set = set(locations)
     prediction_n_locations = location_set
@@ -399,9 +449,8 @@ def get_nuclei_from_predictions(locations, image_id):
                 break
         for i in temp_neucli_locations:
             prediction_n_locations.remove(i)
-        if len(temp_neucli_locations) >= min_nuclei_size or len(nuclei_predictions.keys()) == 0:
-            nuclei_predictions[counter] = temp_neucli_locations
-            counter += 1
+        nuclei_predictions[counter] = temp_neucli_locations
+        counter += 1
 
         print('clusters found:', len(nuclei_predictions), ' pixels_left:', len(prediction_n_locations),image_id)
     return nuclei_predictions
@@ -465,15 +514,16 @@ def get_outputs2(input_dict):
     output, edges, np_image, image_id = input_dict['output_n'], input_dict['edges'], input_dict['np_image'], input_dict['image_id']
     not_f = np.vectorize(lambda t: 0 if t > 0 else 1)
 
-    split_output = binary_opening(output, iterations=5)
-    agreed_output = np.multiply(output, split_output)
     not_edge = not_f(edges)
-    nuclei_not_edge = np.multiply(agreed_output, not_edge)
+    nuclei_not_edge = np.multiply(output, not_edge)
+    split_output = binary_opening(nuclei_not_edge, iterations=2)
+    split_output = np.multiply(output, split_output)
 
-    n_locations = prediction_image_to_location_list(nuclei_not_edge)
+    n_locations = prediction_image_to_location_list(split_output)
     t_locations = prediction_image_to_location_list(output)
+    valid_locations = get_valid_pixels(t_locations)
     clusters = get_nuclei_from_predictions(n_locations, image_id)
-    clusters = train_cluster_model(clusters, t_locations)
+    clusters = train_cluster_model(clusters, valid_locations)
 
     return to_output_format(clusters, np_image, image_id)
 
@@ -560,6 +610,9 @@ def run_predictions(loc_model, edge_model):
         image_id = os.path.basename(image_location).split('.')[0]
         np_image = np.array(start_image.getdata())[:, 0]
         np_image = np_image.reshape(start_image.size[1], start_image.size[0])
+
+        np_image = normalize_image(np_image)
+
         output_dicts.extend(predict_image(loc_model, edge_model, np_image, image_id))
 
     df = pd.DataFrame.from_dict(output_dicts)
