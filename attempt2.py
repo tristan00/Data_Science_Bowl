@@ -6,6 +6,7 @@ import random
 import functools
 import operator
 import traceback
+import multiprocessing
 from scipy.ndimage import gaussian_gradient_magnitude
 import tensorflow as tf
 from keras.models import Model, load_model
@@ -104,7 +105,7 @@ def generate_input_image_and_masks():
     folders = glob.glob(files_loc + 'stage1_train/*/')
     random.shuffle(folders)
 
-    for folder in folders:
+    for count, folder in enumerate(folders):
         try:
             image_location = glob.glob(folder + 'images/*')[0]
             mask_locations = glob.glob(folder + 'masks/*')
@@ -120,6 +121,7 @@ def generate_input_image_and_masks():
                 masks.append(np_mask)
         except OSError:
             continue
+
 
         yield np_image, masks
 
@@ -172,7 +174,10 @@ def get_image_arrays_for_full_location_training(input_image, masks):
     return pd.DataFrame(output)
 
 
-def get_image_arrays_for_full_edge_training(input_image, masks):
+def get_image_arrays_for_full_edge_training(tuple_input):
+    input_image, masks = tuple_input
+    print(input_image.shape)
+
     max_subimages = (min(input_image.shape))//min(full_image_read_size)
 
     gradient = gaussian_gradient_magnitude(input_image, sigma=.4)
@@ -189,9 +194,7 @@ def get_image_arrays_for_full_edge_training(input_image, masks):
                 if m[i, j] == 0:
                     small_mask = m[i - 1:i + 2, j - 1: j + 2]
                     if min(small_mask.shape) > 0 and np.max(small_mask) > 0:
-                        mask_sum[i,j] = 1
-
-
+                        mask_sum[i,j] = 255
 
     vectorized = np.vectorize(lambda t: 1 if t>0 else 0)
     mask_sum = vectorized(mask_sum)
@@ -234,18 +237,22 @@ def get_dataframes_for_training_edge():
     gen = generate_input_image_and_masks()
     edge_dfs = []
 
-    for count, _ in enumerate(range(max_images)):
-        print(count)
-        try:
-            images, masks = next(gen)
-            edge_dfs.append(get_image_arrays_for_full_edge_training(images, masks))
-        except StopIteration:
-            traceback.print_exc()
-            break
+    p = multiprocessing.Pool(processes=4)
+
+    edge_df = pd.concat(list(p.imap(get_image_arrays_for_full_edge_training, gen, chunksize=1)))
+    #edge_df = functools.reduce(pd.concat, dfs)
+
+    # for count, _ in enumerate(range(max_images)):
+    #     print(count)
+    #     try:
+    #         images, masks = next(gen)
+    #         edge_dfs.append(get_image_arrays_for_full_edge_training(images, masks))
+    #     except StopIteration:
+    #         traceback.print_exc()
+    #         break
 
 
     print('images read')
-    edge_df = pd.concat(edge_dfs, ignore_index=True)
     edge_df = edge_df.sample(frac=1)
 
     return edge_df
@@ -288,13 +295,12 @@ def get_loc_model():
 
         x_train, x_test, y_train, y_test = get_model_inputs(df_loc, x_labels=['input'])
         loc_model = get_cnn()
-        loc_model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=5)
+        loc_model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=4)
         loc_model.save(files_loc + 'cnn_full_loc.h5')
     return loc_model
 
 
 def get_edge_model():
-    return None
     try:
         edge_model = load_model(files_loc + 'cnn_full_edge.h5', custom_objects={'mean_iou': mean_iou})
     except:
@@ -303,7 +309,7 @@ def get_edge_model():
         df_edge = get_dataframes_for_training_edge()
         x_train, x_test, y_train, y_test = get_model_inputs(df_edge, x_labels=['input'])
         edge_model = get_cnn()
-        edge_model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=2)
+        edge_model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=4)
         edge_model.save(files_loc + 'cnn_full_edge.h5')
     return edge_model
 
@@ -326,7 +332,7 @@ def get_outputs_from_flat_array(a):
 
     res_str = ''
     for i in image_list:
-        res_str += str(int(i[0]))
+        res_str += str(int(i[0]) + 1)
         res_str += ' '
         res_str += str(len(i))
         res_str += ' '
@@ -469,7 +475,7 @@ def predict_image(loc_model, edge_model, np_image, image_id):
 
 
 def run_predictions(loc_model, edge_model):
-    folders = glob.glob(files_loc + 'stage1_train/*/')
+    folders = glob.glob(files_loc + 'stage1_test/*/')
     random.shuffle(folders)
 
     output_dicts = []
