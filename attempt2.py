@@ -14,7 +14,7 @@ import tensorflow as tf
 from keras.models import Model, load_model
 from keras.layers.core import Dropout, Lambda
 from keras.layers.convolutional import Conv2D, Conv2DTranspose
-from sklearn.ensemble import ExtraTreesClassifier
+from sklearn.ensemble import ExtraTreesClassifier, RandomForestClassifier, BaggingClassifier
 from sklearn.model_selection import train_test_split
 from keras.layers.merge import concatenate
 from keras import backend as K
@@ -27,6 +27,8 @@ from keras.layers.convolutional import Convolution2D, MaxPooling2D, UpSampling2D
 import h5py
 import configparser
 import ast
+import lightgbm
+from sklearn.preprocessing import StandardScaler, MinMaxScaler, Normalizer
 
 config = configparser.ConfigParser()
 config.read('properties.ini')
@@ -52,12 +54,19 @@ def mean_iou(y_true, y_pred):
     return K.mean(K.stack(prec), axis=0)
 
 
-#TODO: change to unit variance and 0 mean
 def normalize_image(np_image):
     if np.median(np_image) > 128:
         flip_f = np.vectorize(lambda t: 255-t)
         np_image = flip_f(np_image)
-    return np_image
+
+    # scaler1 = Normalizer()
+    # scaled_input = scaler1.fit_transform(np_image)
+    # scaler2 = MinMaxScaler(feature_range=(0, 255))
+    # np_image_scaled = scaler2.fit_transform(np_image)
+
+    np_image_scaled = np_image
+
+    return np_image_scaled
 
 
 #taken from https://www.kaggle.com/keegil/keras-u-net-starter-lb-0-277
@@ -404,8 +413,7 @@ def get_valid_pixels(locations):
                 failed_locations.add(n_loc)
             if not location_added:
                 break
-        for i in temp_neucli_locations:
-            prediction_n_locations.remove(i)
+        prediction_n_locations = prediction_n_locations - temp_neucli_locations
         if len(temp_neucli_locations) >= min_nuclei_size or len(valid_locations) == 0:
             valid_locations.update(temp_neucli_locations)
             counter += 1
@@ -447,10 +455,12 @@ def get_nuclei_from_predictions(locations, image_id):
                 failed_locations.add(n_loc)
             if not location_added:
                 break
-        for i in temp_neucli_locations:
-            prediction_n_locations.remove(i)
-        nuclei_predictions[counter] = temp_neucli_locations
-        counter += 1
+        prediction_n_locations = prediction_n_locations - temp_neucli_locations
+        if len(temp_neucli_locations) > min_nuclei_size or len(nuclei_predictions.keys()) == 0:
+            nuclei_predictions[counter] = temp_neucli_locations
+            counter += 1
+        # nuclei_predictions[counter] = temp_neucli_locations
+        # counter += 1
 
         print('clusters found:', len(nuclei_predictions), ' pixels_left:', len(prediction_n_locations),image_id)
     return nuclei_predictions
@@ -465,21 +475,35 @@ def prediction_image_to_location_list(prediction_image):
     return output
 
 
+
+def get_duplicate_values(cluster_dict):
+    count1 = 0
+    full_set = set()
+    for i, j in cluster_dict.items():
+        count1 += len(j)
+        full_set.update(j)
+    if len(full_set) < count1:
+        print('duplicates found')
+
+
+
 #svm was too slow, trying et
-def train_cluster_model(clusters, e_locations):
+def train_cluster_model(clusters, e_locations, n_locations):
     x = []
     y = []
-    print('classifying {0} unclustered pixels'.format(len(e_locations)))
+    points_to_predict = set(e_locations) - set(n_locations)
+
+    print('classifying unclustered pixels:', len(points_to_predict), len(e_locations))
 
     for i in clusters.keys():
 
         #duplicating record for consistent sample size, also
         if len(clusters[i]) == 1:
             for j in clusters[i]:
-                x.append(np.array([j[0],j[1], j[0]/(j[1] + 1), j[1]/(j[0] + 1)]))
+                x.append(np.array([j[0],j[1], j[0]/(j[1] + 1), (256-j[0])/(j[1] + 1)]))
                 y.append(np.array([int(i)]))
         for j in clusters[i]:
-            x.append(np.array([j[0], j[1], j[0] / (j[1] + 1), j[1] / (j[0] + 1)]))
+            x.append(np.array([j[0], j[1], j[0] / (j[1] + 1), (256-j[0])/(j[1] + 1)]))
             y.append(np.array([int(i)]))
     x = np.array(x)
     y = np.array(y)
@@ -488,16 +512,22 @@ def train_cluster_model(clusters, e_locations):
     #x1,x2,y1,y2 = train_test_split(x, y, shuffle=True)
 
     pred_x = []
-    for i in e_locations:
-        pred_x.append(np.array([i[0], i[1], i[0]/(i[1] + 1), i[1]/(i[0] + 1)]))
+    for i in points_to_predict:
+        pred_x.append(np.array([i[0], i[1], i[0]/(i[1] + 1), (256-j[0])/(j[1] + 1)]))
     pred_x = np.array(pred_x)
 
-    clf = ExtraTreesClassifier()
+    clf = ExtraTreesClassifier(n_jobs=-1)
+
+    # clf.fit(x1, y1)
+    # print(clf.score(x2,y2))
+
     clf.fit(x, y)
-    #print(clf.score(x2,y2))
+
     predictions = clf.predict(pred_x)
     for i, j in zip(e_locations, predictions):
-        clusters[j].add(i)
+        if i not in e_locations and i not in n_locations:
+            clusters[j].add(i)
+
 
     return clusters
 
@@ -512,19 +542,24 @@ def get_outputs(input_dict):
 #expirementing with classifying edge pixels
 def get_outputs2(input_dict):
     output, edges, np_image, image_id = input_dict['output_n'], input_dict['edges'], input_dict['np_image'], input_dict['image_id']
+    print(image_id)
     not_f = np.vectorize(lambda t: 0 if t > 0 else 1)
+
+    # split_output = binary_opening(output, iterations=1)
+    # split_output = np.multiply(output, split_output)
 
     not_edge = not_f(edges)
     nuclei_not_edge = np.multiply(output, not_edge)
-    split_output = binary_opening(nuclei_not_edge, iterations=2)
-    split_output = np.multiply(output, split_output)
+    # split_output = binary_opening(nuclei_not_edge, iterations=1)
+    # split_output = np.multiply(output, split_output)
 
-    n_locations = prediction_image_to_location_list(split_output)
+    n_locations = prediction_image_to_location_list(nuclei_not_edge)
     t_locations = prediction_image_to_location_list(output)
     valid_locations = get_valid_pixels(t_locations)
     clusters = get_nuclei_from_predictions(n_locations, image_id)
-    clusters = train_cluster_model(clusters, valid_locations)
-
+    get_duplicate_values(clusters)
+    clusters = train_cluster_model(clusters, valid_locations, n_locations)
+    get_duplicate_values(clusters)
     return to_output_format(clusters, np_image, image_id)
 
 
@@ -605,6 +640,8 @@ def run_predictions(loc_model, edge_model):
     output_dicts = []
 
     for folder in folders:
+        if 'da6c593410340b19bb212b9f6d274f95b08c0fc8f2570cd66bc5ed42c560acab' not in folder:
+            pass
         image_location = glob.glob(folder + 'images/*')[0]
         start_image = Image.open(image_location).convert('LA')
         image_id = os.path.basename(image_location).split('.')[0]
