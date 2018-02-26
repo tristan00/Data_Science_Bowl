@@ -55,17 +55,22 @@ def mean_iou(y_true, y_pred):
 
 
 def normalize_image(np_image):
-    # if np.median(np_image) > 128:
-    #     flip_f = np.vectorize(lambda t: 255-t)
-    #     np_image = flip_f(np_image)
+
+    flat_image = np_image.flatten()
+    if np.median(flat_image) > 128:
+        flip_f = np.vectorize(lambda t: 255-t)
+        flat_image = flip_f(flat_image)
+    flat_image = np.reshape(flat_image, (-1, 1))
     # scaler1 = Normalizer()
     # scaled_input = scaler1.fit_transform(np_image)
-    # scaler2 = MinMaxScaler(feature_range=(0, 255))
-    # np_image_scaled = scaler2.fit_transform(np_image)
+    scaler2 = MinMaxScaler(feature_range=(0, 255))
+    np_image_scaled = scaler2.fit_transform(flat_image)
+    np_image_scaled = np.rint(np_image_scaled)
+    np_image_2 = np.reshape(np_image_scaled, (np_image.shape[0], np_image.shape[1]))
 
-    np_image_scaled = np_image
+    # np_image_scaled = np_image
 
-    return np_image_scaled
+    return np_image_2
 
 
 #taken from https://www.kaggle.com/keegil/keras-u-net-starter-lb-0-277
@@ -288,7 +293,7 @@ def get_model_inputs(df, x_labels, test_size = 0.05):
 
     x = np.array(x)
     y = np.array(y)
-    x = np.nan_to_num(x)
+    #x = np.nan_to_num(x)
 
     print('arrays processed')
 
@@ -313,7 +318,7 @@ def get_loc_model():
 
         x_train, x_test, y_train, y_test = get_model_inputs(df_loc, x_labels=['input'])
         loc_model = get_cnn()
-        loc_model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=2)
+        loc_model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=3)
         loc_model.save(files_loc + 'cnn_full_loc.h5')
     return loc_model
 
@@ -327,7 +332,7 @@ def get_edge_model():
         df_edge = get_dataframes_for_training_edge()
         x_train, x_test, y_train, y_test = get_model_inputs(df_edge, x_labels=['input'])
         edge_model = get_cnn()
-        edge_model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=2)
+        edge_model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=3)
         edge_model.save(files_loc + 'cnn_full_edge.h5')
     return edge_model
 
@@ -550,9 +555,12 @@ def get_outputs2(input_dict):
 
     # split_output = binary_opening(output, iterations=1)
     # split_output = np.multiply(output, split_output)
+    nuclei_not_edge = output
+    # not_edge = not_f(edges)
+    # nuclei_not_edge = np.multiply(output, not_edge)
 
-    not_edge = not_f(edges)
-    nuclei_not_edge = np.multiply(output, not_edge)
+
+
     # split_output = binary_opening(nuclei_not_edge, iterations=1)
     # split_output = np.multiply(output, split_output)
 
@@ -560,9 +568,9 @@ def get_outputs2(input_dict):
     t_locations = prediction_image_to_location_list(output)
     valid_locations = get_valid_pixels(t_locations)
     clusters = get_nuclei_from_predictions(n_locations, image_id)
-    get_duplicate_values(clusters)
-    clusters = train_cluster_model(clusters, valid_locations, n_locations)
-    get_duplicate_values(clusters)
+    # get_duplicate_values(clusters)
+    # clusters = train_cluster_model(clusters, valid_locations, n_locations)
+    # get_duplicate_values(clusters)
     formated_output = to_output_format(clusters, np_image, image_id)
     return formated_output
 
