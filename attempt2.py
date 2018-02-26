@@ -55,10 +55,9 @@ def mean_iou(y_true, y_pred):
 
 
 def normalize_image(np_image):
-    if np.median(np_image) > 128:
-        flip_f = np.vectorize(lambda t: 255-t)
-        np_image = flip_f(np_image)
-
+    # if np.median(np_image) > 128:
+    #     flip_f = np.vectorize(lambda t: 255-t)
+    #     np_image = flip_f(np_image)
     # scaler1 = Normalizer()
     # scaled_input = scaler1.fit_transform(np_image)
     # scaler2 = MinMaxScaler(feature_range=(0, 255))
@@ -363,7 +362,7 @@ def get_outputs_from_flat_array(a):
 def to_output_format(label_dict, np_image, image_name):
     output_dicts = []
     for i in label_dict.keys():
-        print('writing', i)
+
         image_copy = np_image.copy()
         image_copy.fill(0)
         for j in label_dict[i]:
@@ -375,7 +374,7 @@ def to_output_format(label_dict, np_image, image_name):
         output_dict['ImageId'] = image_name
         output_dict['EncodedPixels'] = get_outputs_from_flat_array(flat_image)
         output_dicts.append(output_dict)
-        print('output created:', i, image_name)
+
     return output_dicts
 
 
@@ -491,7 +490,10 @@ def get_duplicate_values(cluster_dict):
 def train_cluster_model(clusters, e_locations, n_locations):
     x = []
     y = []
+
+
     points_to_predict = set(e_locations) - set(n_locations)
+    current_points = functools.reduce(operator.or_, [i for _, i in clusters.items()])
 
     print('classifying unclustered pixels:', len(points_to_predict), len(e_locations))
 
@@ -525,8 +527,9 @@ def train_cluster_model(clusters, e_locations, n_locations):
 
     predictions = clf.predict(pred_x)
     for i, j in zip(e_locations, predictions):
-        if i not in e_locations and i not in n_locations:
+        if i not in current_points:
             clusters[j].add(i)
+            current_points.add(i)
 
 
     return clusters
@@ -560,7 +563,8 @@ def get_outputs2(input_dict):
     get_duplicate_values(clusters)
     clusters = train_cluster_model(clusters, valid_locations, n_locations)
     get_duplicate_values(clusters)
-    return to_output_format(clusters, np_image, image_id)
+    formated_output = to_output_format(clusters, np_image, image_id)
+    return formated_output
 
 
 def predict_subimages(input_image, gradient, transpose, rotation, model):
@@ -640,11 +644,11 @@ def run_predictions(loc_model, edge_model):
     output_dicts = []
 
     for folder in folders:
-        if 'da6c593410340b19bb212b9f6d274f95b08c0fc8f2570cd66bc5ed42c560acab' not in folder:
-            pass
         image_location = glob.glob(folder + 'images/*')[0]
         start_image = Image.open(image_location).convert('LA')
         image_id = os.path.basename(image_location).split('.')[0]
+        if len(image_id) < 5:
+            print('here')
         np_image = np.array(start_image.getdata())[:, 0]
         np_image = np_image.reshape(start_image.size[1], start_image.size[0])
 
