@@ -557,9 +557,8 @@ def train_cluster_model(clusters, v_locations):
 
     predictions = clf.predict(pred_x)
     for i, j in zip(points_to_predict, predictions):
-        if i not in current_points:
-            clusters[j].add(i)
-            current_points.add(i)
+        clusters[j].add(i)
+        current_points.add(i)
 
 
     return clusters
@@ -719,6 +718,7 @@ def run_predictions(loc_model, edge_model):
         output_dicts.extend(predict_image(loc_model, edge_model, np_image, image_id))
 
     df = pd.DataFrame.from_dict(output_dicts)
+    df = df[['ImageId', 'EncodedPixels']]
     df.to_csv('output.csv', index = False)
 
 
