@@ -6,10 +6,12 @@ import random
 import functools
 import operator
 import keras.utils
+import scipy.misc
 import traceback
 import multiprocessing
 from scipy.ndimage import gaussian_gradient_magnitude, morphology
 from scipy.ndimage.morphology import binary_opening
+from keras import optimizers
 import tensorflow as tf
 from keras.models import Model, load_model
 from keras.layers.core import Dropout, Lambda
@@ -26,9 +28,10 @@ import os
 from keras.layers.convolutional import Convolution2D, MaxPooling2D, UpSampling2D, ZeroPadding2D
 import h5py
 import configparser
+from sklearn import preprocessing
 import ast
 import lightgbm
-from sklearn.preprocessing import StandardScaler, MinMaxScaler, Normalizer
+from sklearn.preprocessing import StandardScaler, MinMaxScaler, Normalizer, QuantileTransformer
 
 config = configparser.ConfigParser()
 config.read('properties.ini')
@@ -61,12 +64,24 @@ def normalize_image(np_image):
         flip_f = np.vectorize(lambda t: 255-t)
         flat_image = flip_f(flat_image)
     flat_image = np.reshape(flat_image, (-1, 1))
-    # scaler1 = Normalizer()
-    # scaled_input = scaler1.fit_transform(np_image)
+
     scaler2 = MinMaxScaler(feature_range=(0, 255))
-    np_image_scaled = scaler2.fit_transform(flat_image)
-    np_image_scaled = np.rint(np_image_scaled)
-    np_image_2 = np.reshape(np_image_scaled, (np_image.shape[0], np_image.shape[1]))
+    flat_image = scaler2.fit_transform(flat_image)
+
+    # scaler1 = QuantileTransformer(n_quantiles= 25)
+    # flat_image = scaler1.fit_transform(flat_image)
+    #
+    # scaler3 = MinMaxScaler(feature_range=(0, 255))
+    # flat_image = scaler3.fit_transform(flat_image)
+
+
+
+    flat_image = np.rint(flat_image)
+
+    np_image_2 = np.reshape(flat_image, (np_image.shape[0], np_image.shape[1]))
+
+    # scipy.misc.imsave('location_image_1.jpg', np_image)
+    # scipy.misc.imsave('location_image_2.jpg', np_image_2)
 
     # np_image_scaled = np_image
 
@@ -129,7 +144,9 @@ def get_cnn():
     outputs = Conv2D(1, (1, 1), activation='sigmoid')(c9)
 
     model = Model(inputs=[inputs], outputs=[outputs])
-    model.compile(optimizer='adam', loss='binary_crossentropy', metrics=[mean_iou])
+    #model.compile(optimizer='adam', loss='binary_crossentropy', metrics=[mean_iou])
+    adam = optimizers.Adam(lr=.0001, decay=1e-6)
+    model.compile(optimizer=adam, loss='binary_crossentropy', metrics=[mean_iou, 'acc'])
     return model
 
 
@@ -153,6 +170,7 @@ def generate_input_image_and_masks():
                 masks.append(np_mask)
         except OSError:
             continue
+
 
         yield np_image, masks
 
@@ -221,8 +239,12 @@ def get_image_arrays_for_full_edge_training(tuple_input):
     for m in masks:
         mask_sum = np.add(gaussian_gradient_magnitude(m, sigma=.4), mask_sum)
 
+
+
     vectorized = np.vectorize(lambda t: 1 if t>0 else 0)
     mask_sum = vectorized(mask_sum)
+
+    print(np.mean(mask_sum))
 
     output = []
     output.extend(get_subimages(input_image, gradient, mask_sum, transpose=False, rotation=0))
@@ -318,7 +340,7 @@ def get_loc_model():
 
         x_train, x_test, y_train, y_test = get_model_inputs(df_loc, x_labels=['input'])
         loc_model = get_cnn()
-        loc_model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=3)
+        loc_model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=6)
         loc_model.save(files_loc + 'cnn_full_loc.h5')
     return loc_model
 
@@ -332,7 +354,7 @@ def get_edge_model():
         df_edge = get_dataframes_for_training_edge()
         x_train, x_test, y_train, y_test = get_model_inputs(df_edge, x_labels=['input'])
         edge_model = get_cnn()
-        edge_model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=3)
+        edge_model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=4)
         edge_model.save(files_loc + 'cnn_full_edge.h5')
     return edge_model
 
@@ -490,27 +512,30 @@ def get_duplicate_values(cluster_dict):
         print('duplicates found')
 
 
+def point_to_cluster_classification_model_features(t):
+    return [t[0], t[1], t[0] / (t[1] + 1), (0-t[0])/(t[1] + 1), t[0]+t[1], (t[0]+t[1])**2, (t[0]+t[1])/((t[0]+t[1])**2)]
+
 
 #svm was too slow, trying et
-def train_cluster_model(clusters, e_locations, n_locations):
+def train_cluster_model(clusters, v_locations):
     x = []
     y = []
 
 
-    points_to_predict = set(e_locations) - set(n_locations)
     current_points = functools.reduce(operator.or_, [i for _, i in clusters.items()])
+    points_to_predict = set(v_locations) - current_points
 
-    print('classifying unclustered pixels:', len(points_to_predict), len(e_locations))
+    print('classifying unclustered pixels:', len(points_to_predict), len(current_points))
 
     for i in clusters.keys():
 
         #duplicating record for consistent sample size, also
         if len(clusters[i]) == 1:
             for j in clusters[i]:
-                x.append(np.array([j[0],j[1], j[0]/(j[1] + 1), (256-j[0])/(j[1] + 1)]))
+                x.append(np.array(point_to_cluster_classification_model_features(j)))
                 y.append(np.array([int(i)]))
         for j in clusters[i]:
-            x.append(np.array([j[0], j[1], j[0] / (j[1] + 1), (256-j[0])/(j[1] + 1)]))
+            x.append(np.array(point_to_cluster_classification_model_features(j)))
             y.append(np.array([int(i)]))
     x = np.array(x)
     y = np.array(y)
@@ -520,7 +545,7 @@ def train_cluster_model(clusters, e_locations, n_locations):
 
     pred_x = []
     for i in points_to_predict:
-        pred_x.append(np.array([i[0], i[1], i[0]/(i[1] + 1), (256-j[0])/(j[1] + 1)]))
+        pred_x.append(np.array(point_to_cluster_classification_model_features(i)))
     pred_x = np.array(pred_x)
 
     clf = ExtraTreesClassifier(n_jobs=-1)
@@ -531,7 +556,7 @@ def train_cluster_model(clusters, e_locations, n_locations):
     clf.fit(x, y)
 
     predictions = clf.predict(pred_x)
-    for i, j in zip(e_locations, predictions):
+    for i, j in zip(points_to_predict, predictions):
         if i not in current_points:
             clusters[j].add(i)
             current_points.add(i)
@@ -547,30 +572,59 @@ def get_outputs(input_dict):
     return to_output_format(clusters, np_image, image_id)
 
 
+
+def locations_to_np_array(locations, np_image):
+    np_image = np_image.copy()
+    np_image[:] = 0
+    for l in locations:
+        np_image[l[0], l[1]] = 1
+    return np_image
+
+
+def split_clusters(clusters, edges, np_image, image_id):
+
+    adj_cluster_list = []
+    for _, c in clusters.items():
+        cluster_sub_edges_locations = set(c) - set(edges)
+        adj_cluster1 = get_nuclei_from_predictions(cluster_sub_edges_locations, image_id)
+        adj_cluster_count1 = len(adj_cluster1.keys())
+        cluster1_locations = functools.reduce(operator.or_, [i for _, i in adj_cluster1.items()])
+
+        image_without_edges = locations_to_np_array(cluster1_locations, np_image)
+        image_without_edges = binary_opening(image_without_edges, iterations=1)
+        n_locations = prediction_image_to_location_list(image_without_edges)
+        adj_cluster2= get_nuclei_from_predictions(n_locations, image_id)
+        adj_cluster_count2 = len(adj_cluster2.keys())
+
+
+
+        if adj_cluster_count1 > 1 and adj_cluster_count1 == max(adj_cluster_count2, adj_cluster_count1):
+            adj_cluster_list.append(adj_cluster1)
+        elif adj_cluster_count2 > 1 and adj_cluster_count2 == max(adj_cluster_count2, adj_cluster_count1):
+            adj_cluster_list.append(adj_cluster2)
+        else:
+            adj_cluster_list.append({0:c})
+
+    adj_clusters = dict()
+
+    cluster_id = 0
+    for i in adj_cluster_list:
+        for k, v in i.keys():
+            adj_clusters[cluster_id] = v
+            cluster_id += 1
+    return adj_clusters
+
+
 #expirementing with classifying edge pixels
 def get_outputs2(input_dict):
     output, edges, np_image, image_id = input_dict['output_n'], input_dict['edges'], input_dict['np_image'], input_dict['image_id']
-    print(image_id)
-    not_f = np.vectorize(lambda t: 0 if t > 0 else 1)
 
-    # split_output = binary_opening(output, iterations=1)
-    # split_output = np.multiply(output, split_output)
-    nuclei_not_edge = output
-    # not_edge = not_f(edges)
-    # nuclei_not_edge = np.multiply(output, not_edge)
+    n_locations = prediction_image_to_location_list(output)
+    v_locations = get_valid_pixels(output, image_id)
+    clusters = get_nuclei_from_predictions(v_locations, image_id)
 
-
-
-    # split_output = binary_opening(nuclei_not_edge, iterations=1)
-    # split_output = np.multiply(output, split_output)
-
-    n_locations = prediction_image_to_location_list(nuclei_not_edge)
-    t_locations = prediction_image_to_location_list(output)
-    valid_locations = get_valid_pixels(t_locations)
-    clusters = get_nuclei_from_predictions(n_locations, image_id)
-    # get_duplicate_values(clusters)
-    # clusters = train_cluster_model(clusters, valid_locations, n_locations)
-    # get_duplicate_values(clusters)
+    clusters = split_clusters(clusters, edges, np_image, image_id)
+    clusters = train_cluster_model(clusters, v_locations, n_locations)
     formated_output = to_output_format(clusters, np_image, image_id)
     return formated_output
 
@@ -669,10 +723,11 @@ def run_predictions(loc_model, edge_model):
 
 
 def main():
-    edge_model = get_edge_model()
-    print('edge model loaded')
     loc_model = get_loc_model()
     print('loc model loaded')
+    edge_model = get_edge_model()
+    print('edge model loaded')
+
 
     run_predictions(loc_model, edge_model)
 
