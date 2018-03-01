@@ -57,6 +57,27 @@ def mean_iou(y_true, y_pred):
     return K.mean(K.stack(prec), axis=0)
 
 
+def IOU_calc(y_true, y_pred):
+    y_true_f = K.flatten(y_true)
+    y_pred_f = K.flatten(y_pred)
+    res = 0
+
+    # for t in np.arange(0.5, 1.0, 0.05):
+    #     adj_pred = tf.to_int32(y_pred_f > t)
+    #     intersection = K.sum(y_true_f * adj_pred)
+    #     res += 2 * (intersection + 1) / (K.sum(y_true_f) + K.sum(adj_pred) + 1)
+    #
+    # res = res / len([i for i  in np.arange(0.5, 1.0, 0.05)])
+    #
+    # return res
+    intersection = K.sum(y_true_f * y_pred_f)
+    return 2 * (intersection + 1) / (K.sum(y_true_f) + K.sum(y_pred_f) + 1)
+
+
+def IOU_calc_loss(y_true, y_pred):
+    return -IOU_calc(y_true, y_pred)
+
+
 def normalize_image(np_image):
 
     flat_image = np_image.flatten()
@@ -146,7 +167,7 @@ def get_cnn():
     model = Model(inputs=[inputs], outputs=[outputs])
     #model.compile(optimizer='adam', loss='binary_crossentropy', metrics=[mean_iou])
     adam = optimizers.Adam(lr=.0001, decay=1e-6)
-    model.compile(optimizer=adam, loss='binary_crossentropy', metrics=[mean_iou, 'acc'])
+    model.compile(optimizer=adam, loss=IOU_calc_loss, metrics=[mean_iou, 'acc'])
     return model
 
 
@@ -333,29 +354,29 @@ def get_model_inputs(df, x_labels, test_size = 0.05):
 
 def get_loc_model():
     try:
-        loc_model = load_model(files_loc + 'cnn_full_loc.h5', custom_objects={'mean_iou': mean_iou})
+        loc_model = load_model(files_loc + 'cnn_full_loc2.h5', custom_objects={'mean_iou': mean_iou})
     except:
         traceback.print_exc()
         df_loc = get_dataframes_for_training_location()
 
         x_train, x_test, y_train, y_test = get_model_inputs(df_loc, x_labels=['input'])
         loc_model = get_cnn()
-        loc_model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=6)
-        loc_model.save(files_loc + 'cnn_full_loc.h5')
+        loc_model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=5)
+        loc_model.save(files_loc + 'cnn_full_loc2.h5')
     return loc_model
 
 
 def get_edge_model():
     try:
-        edge_model = load_model(files_loc + 'cnn_full_edge.h5', custom_objects={'mean_iou': mean_iou})
+        edge_model = load_model(files_loc + 'cnn_full_edge2.h5', custom_objects={'mean_iou': mean_iou})
     except:
         traceback.print_exc()
 
         df_edge = get_dataframes_for_training_edge()
         x_train, x_test, y_train, y_test = get_model_inputs(df_edge, x_labels=['input'])
         edge_model = get_cnn()
-        edge_model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=4)
-        edge_model.save(files_loc + 'cnn_full_edge.h5')
+        edge_model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=5)
+        edge_model.save(files_loc + 'cnn_full_edge2.h5')
     return edge_model
 
 
@@ -482,11 +503,12 @@ def get_nuclei_from_predictions(locations, image_id):
             if not location_added:
                 break
         prediction_n_locations = prediction_n_locations - temp_neucli_locations
-        if len(temp_neucli_locations) > min_nuclei_size or len(nuclei_predictions.keys()) == 0:
+        # if len(temp_neucli_locations) > min_nuclei_size or len(nuclei_predictions.keys()) == 0:
+        #     nuclei_predictions[counter] = temp_neucli_locations
+        #     counter += 1
+        if len(temp_neucli_locations) > 0:
             nuclei_predictions[counter] = temp_neucli_locations
             counter += 1
-        # nuclei_predictions[counter] = temp_neucli_locations
-        # counter += 1
 
         print('clusters found:', len(nuclei_predictions), ' pixels_left:', len(prediction_n_locations),image_id)
     return nuclei_predictions
@@ -513,7 +535,7 @@ def get_duplicate_values(cluster_dict):
 
 
 def point_to_cluster_classification_model_features(t):
-    return [t[0], t[1], t[0] / (t[1] + 1), (0-t[0])/(t[1] + 1), t[0]+t[1], (t[0]+t[1])**2, (t[0]+t[1])/((t[0]+t[1])**2)]
+    return [t[0], t[1], t[0] / (t[1] + 1), (t[1])/(t[0] + 1), t[0]+t[1], (t[0]+t[1])**2, (t[0]+t[1])/((t[0]+t[1] + 1)**2)]
 
 
 #svm was too slow, trying et
@@ -555,11 +577,14 @@ def train_cluster_model(clusters, v_locations):
 
     clf.fit(x, y)
 
-    predictions = clf.predict(pred_x)
-    for i, j in zip(points_to_predict, predictions):
-        clusters[j].add(i)
-        current_points.add(i)
-
+    try:
+        predictions = clf.predict(pred_x)
+        for i, j in zip(points_to_predict, predictions):
+            clusters[j].add(i)
+            current_points.add(i)
+    except:
+        traceback.print_exc()
+        print(pred_x.shape)
 
     return clusters
 
@@ -584,11 +609,16 @@ def split_clusters(clusters, edges, np_image, image_id):
 
     adj_cluster_list = []
     for _, c in clusters.items():
-        cluster_sub_edges_locations = set(c) - set(edges)
+        cluster_sub_edges_locations = c - set(edges)
         adj_cluster1 = get_nuclei_from_predictions(cluster_sub_edges_locations, image_id)
         adj_cluster_count1 = len(adj_cluster1.keys())
-        cluster1_locations = functools.reduce(operator.or_, [i for _, i in adj_cluster1.items()])
-
+        print(adj_cluster_count1)
+        try:
+            cluster1_locations = functools.reduce(operator.or_, [i for _, i in adj_cluster1.items()])
+        except:
+            adj_cluster_list.append({0: c})
+            traceback.print_exc()
+            continue
         image_without_edges = locations_to_np_array(cluster1_locations, np_image)
         image_without_edges = binary_opening(image_without_edges, iterations=1)
         n_locations = prediction_image_to_location_list(image_without_edges)
@@ -608,7 +638,7 @@ def split_clusters(clusters, edges, np_image, image_id):
 
     cluster_id = 0
     for i in adj_cluster_list:
-        for k, v in i.keys():
+        for k, v in i.items():
             adj_clusters[cluster_id] = v
             cluster_id += 1
     return adj_clusters
@@ -618,12 +648,13 @@ def split_clusters(clusters, edges, np_image, image_id):
 def get_outputs2(input_dict):
     output, edges, np_image, image_id = input_dict['output_n'], input_dict['edges'], input_dict['np_image'], input_dict['image_id']
 
-    n_locations = prediction_image_to_location_list(output)
-    v_locations = get_valid_pixels(output, image_id)
+    v_locations = prediction_image_to_location_list(output)
+    v_locations = get_valid_pixels(v_locations)
+    edge_locations = prediction_image_to_location_list(edges)
     clusters = get_nuclei_from_predictions(v_locations, image_id)
 
-    clusters = split_clusters(clusters, edges, np_image, image_id)
-    clusters = train_cluster_model(clusters, v_locations, n_locations)
+    clusters = split_clusters(clusters, edge_locations, np_image, image_id)
+    clusters = train_cluster_model(clusters, v_locations)
     formated_output = to_output_format(clusters, np_image, image_id)
     return formated_output
 
