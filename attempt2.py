@@ -622,15 +622,14 @@ def split_clusters(clusters, edges, np_image, image_id):
         image_without_edges = locations_to_np_array(cluster1_locations, np_image)
         image_without_edges = binary_opening(image_without_edges, iterations=1)
         n_locations = prediction_image_to_location_list(image_without_edges)
-        adj_cluster2= get_nuclei_from_predictions(n_locations, image_id)
-        adj_cluster_count2 = len(adj_cluster2.keys())
+        adj_cluster1= get_nuclei_from_predictions(n_locations, image_id)
+        adj_cluster_count1 = len(adj_cluster1.keys())
 
 
 
-        if adj_cluster_count1 > 1 and adj_cluster_count1 == max(adj_cluster_count2, adj_cluster_count1):
+        if adj_cluster_count1 > 1:
             adj_cluster_list.append(adj_cluster1)
-        elif adj_cluster_count2 > 1 and adj_cluster_count2 == max(adj_cluster_count2, adj_cluster_count1):
-            adj_cluster_list.append(adj_cluster2)
+
         else:
             adj_cluster_list.append({0:c})
 
