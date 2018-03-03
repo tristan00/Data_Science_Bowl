@@ -665,14 +665,6 @@ def train_cluster_model(clusters, v_locations):
     return clusters
 
 
-def get_outputs(input_dict):
-    output, np_image, image_id = input_dict['output_n'], input_dict['np_image'], input_dict['image_id']
-    locations = prediction_image_to_location_list(output)
-    clusters = get_nuclei_from_predictions(locations, image_id)
-    return to_output_format(clusters, np_image, image_id)
-
-
-
 def locations_to_np_array(locations, np_image):
     np_image = np_image.copy()
     np_image[:] = 0
@@ -737,7 +729,7 @@ def split_clusters(clusters, edges1, edges2, np_image, image_id):
 
 
 #expirementing with classifying edge pixels
-def get_outputs2(input_dict):
+def get_outputs(input_dict):
     output, edges_with_contact, edges_without_contact, np_image, image_id = input_dict['output_n'], input_dict['edges_with_contact'], input_dict['edges_without_contact'], input_dict['np_image'], input_dict['image_id']
 
     v_locations = prediction_image_to_location_list(output)
