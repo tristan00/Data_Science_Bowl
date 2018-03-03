@@ -208,39 +208,51 @@ def get_subimages(input_image, gradient, input_mask, transpose = False, rotation
     max_x_subimages  = (input_image.shape[0])//full_image_read_size[0]
     max_y_subimages = (input_image.shape[1]) // full_image_read_size[1]
 
-    step_size = 8
-
-    x_index = 0
-    y_index = 0
-    output = []
-    while x_index + full_image_read_size[0] < input_image.shape[0]:
-        while y_index + full_image_read_size[1] < input_image.shape[1]:
-            x1 = x_index * full_image_read_size[0]
-            x2 = (1 + x_index) * full_image_read_size[0]
-            y1 = y_index * full_image_read_size[1]
-            y2 = (1 + y_index) * full_image_read_size[1]
-            next_input = {'input': np.dstack((np.expand_dims(input_image[x1:x2, y1:y2], axis=2),
-                                              np.expand_dims(input_gradient[x1:x2, y1:y2], axis=2))),
-                          'output': np.expand_dims(input_mask[x1:x2, y1:y2], axis=2)}
-
-            if np.mean(input_mask[x1:x2, y1:y2]) > 0 and mask_non_zero:
-                output.append(next_input)
-            x_index += step_size
-            y_index += step_size
-
-    # for i in range(max_x_subimages):
-    #     for j in range(max_y_subimages):
-    #         x1 = i*full_image_read_size[0]
-    #         x2 = (1+i)*full_image_read_size[0]
-    #         y1 = j*full_image_read_size[1]
-    #         y2 = (1+j)*full_image_read_size[1]
-    #         next_input = {'input':np.dstack((np.expand_dims(input_image[x1:x2,y1:y2], axis=2),
-    #                                          np.expand_dims(input_gradient[x1:x2,y1:y2], axis=2))),
-    #                        'output':np.expand_dims(input_mask[x1:x2,y1:y2], axis=2)}
+    # step_size = input_image.shape[0]
     #
-    #         if np.mean(input_mask[x1:x2,y1:y2]) > 0:
+    # x_index = 0
+    # output = []
+    #
+    # while x_index + full_image_read_size[0] < input_image.shape[0]:
+    #     y_index = 0
+    #     while y_index + full_image_read_size[1] < input_image.shape[1]:
+    #         x1 = x_index
+    #         x2 = x_index + full_image_read_size[0]
+    #         y1 = y_index
+    #         y2 = y_index + full_image_read_size[1]
+    #
+    #         if np.mean(input_mask[x1:x2, y1:y2]) > 0 and mask_non_zero:
+    #             next_input = {'input': np.dstack((np.expand_dims(input_image[x1:x2, y1:y2], axis=2),
+    #                                               np.expand_dims(input_gradient[x1:x2, y1:y2], axis=2))),
+    #                           'output': np.expand_dims(input_mask[x1:x2, y1:y2], axis=2)}
     #             output.append(next_input)
-    #         #print(next_input['input'].shape, next_input['output'].shape)
+    #             #print('output added', x_index, y_index)
+    #         elif not mask_non_zero:
+    #             next_input = {'input': np.dstack((np.expand_dims(input_image[x1:x2, y1:y2], axis=2),
+    #                                               np.expand_dims(input_gradient[x1:x2, y1:y2], axis=2))),
+    #                           'output': np.expand_dims(input_mask[x1:x2, y1:y2], axis=2)}
+    #             output.append(next_input)
+    #         else:
+    #             pass
+    #             #print('output skipped', x_index, y_index)
+    #
+    #         y_index += step_size
+    #     x_index += step_size
+
+    output = []
+    for i in range(max_x_subimages):
+        for j in range(max_y_subimages):
+            x1 = i*full_image_read_size[0]
+            x2 = (1+i)*full_image_read_size[0]
+            y1 = j*full_image_read_size[1]
+            y2 = (1+j)*full_image_read_size[1]
+            next_input = {'input':np.dstack((np.expand_dims(input_image[x1:x2,y1:y2], axis=2),
+                                             np.expand_dims(input_gradient[x1:x2,y1:y2], axis=2))),
+                           'output':np.expand_dims(input_mask[x1:x2,y1:y2], axis=2)}
+
+            if np.mean(input_mask[x1:x2,y1:y2]) > 0:
+                output.append(next_input)
+            #print(next_input['input'].shape, next_input['output'].shape)
     return output
 
 
@@ -362,7 +374,7 @@ def get_dataframes_for_training_edge_with_contact():
 
     p = multiprocessing.Pool(processes=4)
     edge_df = pd.concat(list(p.imap(get_image_arrays_for_full_edge_training_with_contact, gen, chunksize=1)))
-
+    # get_image_arrays_for_full_edge_training_with_contact(gen.__next__)
     print('images read')
     edge_df = edge_df.sample(frac=1)
 
@@ -431,7 +443,7 @@ def get_edge_model_with_contact():
         df_edge = get_dataframes_for_training_edge_with_contact()
         x_train, x_test, y_train, y_test = get_model_inputs(df_edge, x_labels=['input'])
         edge_model = get_cnn()
-        edge_model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=10)
+        edge_model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=16)
         edge_model.save(files_loc + 'cnn_full_edge_connected_only.h5')
     return edge_model
 
@@ -679,23 +691,35 @@ def split_clusters(clusters, edges1, edges2, np_image, image_id):
 
     adj_cluster_list = []
     for _, c in clusters.items():
-        cluster_sub_edges_locations = c - set(edges1)
-        adj_cluster1 = get_nuclei_from_predictions(cluster_sub_edges_locations, image_id)
-        cluster1_locations = functools.reduce(operator.or_, [i for _, i in adj_cluster1.items()])
+        try:
+            cluster_sub_edges_locations = c - set(edges1)
+            adj_cluster1 = get_nuclei_from_predictions(cluster_sub_edges_locations, image_id)
+            cluster1_locations = functools.reduce(operator.or_, [i for _, i in adj_cluster1.items()])
+        except:
+            traceback.print_exc()
+            adj_cluster_list.append({0: c})
+            continue
 
-        cluster_sub_edges_locations2 = cluster_sub_edges_locations - set(edges2)
-        adj_cluster2 = get_nuclei_from_predictions(cluster_sub_edges_locations2, image_id)
-        cluster2_locations = functools.reduce(operator.or_, [i for _, i in adj_cluster2.items()])
+        # try:
+        #     cluster_sub_edges_locations2 = cluster_sub_edges_locations - set(edges2)
+        #     adj_cluster2 = get_nuclei_from_predictions(cluster_sub_edges_locations2, image_id)
+        #     cluster2_locations = functools.reduce(operator.or_, [i for _, i in adj_cluster2.items()])
+        #
+        #     adj_cluster_count1 = len(adj_cluster1.keys())
+        #     adj_cluster_count2 = len(adj_cluster2.keys())
+        #
+        #     if adj_cluster_count2 > adj_cluster_count1:
+        #         adj_cluster = adj_cluster2
+        #         cluster_locations = cluster1_locations
+        #     else:
+        #         adj_cluster = adj_cluster1
+        #         cluster_locations = cluster2_locations
+        # except:
+        #     traceback.print_exc()
+        #     adj_cluster = adj_cluster1
+        #     cluster_locations = cluster1_locations
 
-        adj_cluster_count1 = len(adj_cluster1.keys())
-        adj_cluster_count2 = len(adj_cluster2.keys())
-
-        if adj_cluster_count2 > adj_cluster_count1:
-            adj_cluster = adj_cluster2
-            cluster_locations = cluster1_locations
-        else:
-            adj_cluster = adj_cluster1
-            cluster_locations = cluster2_locations
+        cluster_locations = cluster1_locations
 
         image_without_edges = locations_to_np_array(cluster_locations, np_image)
         image_without_edges = binary_opening(image_without_edges, iterations=2)
