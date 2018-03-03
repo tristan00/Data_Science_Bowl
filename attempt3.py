@@ -42,20 +42,10 @@ files_loc = config.get(section, 'file_loc')
 min_nuclei_size = ast.literal_eval(config.get(section, 'min_nuclei_size'))
 confidence_threshold = ast.literal_eval(config.get(section, 'confidence_threshold'))
 full_image_read_size = ast.literal_eval(config.get(section, 'full_image_read_size'))
+max_training_iter = ast.literal_eval(config.get(section, 'max_training_iter'))
 
 
 #TODO: figure out gradient class issue
-def mean_iou(y_true, y_pred):
-    prec = []
-    for t in np.arange(0.5, 1.0, 0.05):
-        y_pred_ = tf.to_int32(y_pred > t)
-        score, up_opt = tf.metrics.mean_iou(y_true, y_pred_, 2)
-        K.get_session().run(tf.local_variables_initializer())
-        with tf.control_dependencies([up_opt]):
-            score = tf.identity(score)
-        prec.append(score)
-    return K.mean(K.stack(prec), axis=0)
-
 
 def IOU_calc(y_true, y_pred):
     y_true_f = K.flatten(y_true)
@@ -167,7 +157,7 @@ def get_cnn():
     model = Model(inputs=[inputs], outputs=[outputs])
     #model.compile(optimizer='adam', loss='binary_crossentropy', metrics=[mean_iou])
     adam = optimizers.Adam(lr=.0001, decay=1e-6)
-    model.compile(optimizer=adam, loss=IOU_calc_loss, metrics=[mean_iou, 'acc'])
+    model.compile(optimizer=adam, loss=IOU_calc_loss, metrics=['acc'])
     return model
 
 
@@ -191,6 +181,8 @@ def generate_input_image_and_masks():
                 masks.append(np_mask)
         except OSError:
             continue
+        # if count > 10:
+        #     break
 
         yield np_image, masks
 
@@ -208,51 +200,43 @@ def get_subimages(input_image, gradient, input_mask, transpose = False, rotation
     max_x_subimages  = (input_image.shape[0])//full_image_read_size[0]
     max_y_subimages = (input_image.shape[1]) // full_image_read_size[1]
 
-    # step_size = input_image.shape[0]
-    #
-    # x_index = 0
-    # output = []
-    #
-    # while x_index + full_image_read_size[0] < input_image.shape[0]:
-    #     y_index = 0
-    #     while y_index + full_image_read_size[1] < input_image.shape[1]:
-    #         x1 = x_index
-    #         x2 = x_index + full_image_read_size[0]
-    #         y1 = y_index
-    #         y2 = y_index + full_image_read_size[1]
-    #
-    #         if np.mean(input_mask[x1:x2, y1:y2]) > 0 and mask_non_zero:
-    #             next_input = {'input': np.dstack((np.expand_dims(input_image[x1:x2, y1:y2], axis=2),
-    #                                               np.expand_dims(input_gradient[x1:x2, y1:y2], axis=2))),
-    #                           'output': np.expand_dims(input_mask[x1:x2, y1:y2], axis=2)}
-    #             output.append(next_input)
-    #             #print('output added', x_index, y_index)
-    #         elif not mask_non_zero:
-    #             next_input = {'input': np.dstack((np.expand_dims(input_image[x1:x2, y1:y2], axis=2),
-    #                                               np.expand_dims(input_gradient[x1:x2, y1:y2], axis=2))),
-    #                           'output': np.expand_dims(input_mask[x1:x2, y1:y2], axis=2)}
-    #             output.append(next_input)
-    #         else:
-    #             pass
-    #             #print('output skipped', x_index, y_index)
-    #
-    #         y_index += step_size
-    #     x_index += step_size
+    step_size = 35
 
+    x_index = 0
     output = []
-    for i in range(max_x_subimages):
-        for j in range(max_y_subimages):
-            x1 = i*full_image_read_size[0]
-            x2 = (1+i)*full_image_read_size[0]
-            y1 = j*full_image_read_size[1]
-            y2 = (1+j)*full_image_read_size[1]
-            next_input = {'input':np.dstack((np.expand_dims(input_image[x1:x2,y1:y2], axis=2),
-                                             np.expand_dims(input_gradient[x1:x2,y1:y2], axis=2))),
-                           'output':np.expand_dims(input_mask[x1:x2,y1:y2], axis=2)}
 
-            if np.mean(input_mask[x1:x2,y1:y2]) > 0:
+    while x_index + full_image_read_size[0] < input_image.shape[0]:
+        y_index = 0
+        while y_index + full_image_read_size[1] < input_image.shape[1]:
+            x1 = x_index
+            x2 = x_index + full_image_read_size[0]
+            y1 = y_index
+            y2 = y_index + full_image_read_size[1]
+
+            if np.mean(input_mask[x1:x2, y1:y2]) > 0:
+                next_input = {'input': np.dstack((np.expand_dims(input_image[x1:x2, y1:y2], axis=2),
+                                                  np.expand_dims(input_gradient[x1:x2, y1:y2], axis=2))),
+                              'output': np.expand_dims(input_mask[x1:x2, y1:y2], axis=2)}
                 output.append(next_input)
-            #print(next_input['input'].shape, next_input['output'].shape)
+                print('output added', x_index, y_index)
+
+            y_index += step_size
+        x_index += step_size
+
+    # output = []
+    # for i in range(max_x_subimages):
+    #     for j in range(max_y_subimages):
+    #         x1 = i*full_image_read_size[0]
+    #         x2 = (1+i)*full_image_read_size[0]
+    #         y1 = j*full_image_read_size[1]
+    #         y2 = (1+j)*full_image_read_size[1]
+    #         next_input = {'input':np.dstack((np.expand_dims(input_image[x1:x2,y1:y2], axis=2),
+    #                                          np.expand_dims(input_gradient[x1:x2,y1:y2], axis=2))),
+    #                        'output':np.expand_dims(input_mask[x1:x2,y1:y2], axis=2)}
+    #
+    #         if np.mean(input_mask[x1:x2,y1:y2]) > 0:
+    #             output.append(next_input)
+    #         #print(next_input['input'].shape, next_input['output'].shape)
     return output
 
 
@@ -262,8 +246,10 @@ def get_image_arrays_for_full_location_training(input_image, masks):
     gradient = gaussian_gradient_magnitude(input_image, sigma=.4)
 
     mask_sum = functools.reduce(operator.add, masks)
-    vectorized = np.vectorize(lambda t: 1 if t>0 else 0)
-    mask_sum = vectorized(mask_sum)
+    mask_sum = mask_sum > 0
+    mask_sum = mask_sum.astype(int)
+    # vectorized = np.vectorize(lambda t: 1 if t>0 else 0)
+    # mask_sum = vectorized(mask_sum)
 
     output = []
     output.extend(get_subimages(input_image, gradient, mask_sum, transpose=False, rotation=0))
@@ -292,10 +278,12 @@ def get_image_arrays_for_full_edge_training_with_contact(tuple_input):
     vectorized2 = np.vectorize(lambda t: 1 if t > 1 else 0)
     for m in masks:
         temp_edge = gaussian_gradient_magnitude(m, sigma=.4)
-        temp_edge = vectorized(temp_edge)
-        mask_sum = np.add(temp_edge, mask_sum)
+        temp_edge = temp_edge > 0
+        mask_sum = np.add(temp_edge.astype(int), mask_sum)
 
-    mask_sum = vectorized2(mask_sum)
+    mask_sum = mask_sum > 1
+    mask_sum = mask_sum.astype(int)
+
     output = []
 
     print(np.mean(mask_sum))
@@ -327,10 +315,11 @@ def get_image_arrays_for_full_edge_training_without_contact(tuple_input):
     vectorized2 = np.vectorize(lambda t: 1 if t == 1 else 0)
     for m in masks:
         temp_edge = gaussian_gradient_magnitude(m, sigma=.4)
-        temp_edge = vectorized(temp_edge)
-        mask_sum = np.add(temp_edge, mask_sum)
+        temp_edge = temp_edge > 0
+        mask_sum = np.add(temp_edge.astype(int), mask_sum)
 
-    mask_sum = vectorized2(mask_sum)
+    mask_sum = mask_sum == 1
+    mask_sum = mask_sum.astype(int)
     output = []
 
     print(np.mean(mask_sum))
@@ -395,6 +384,7 @@ def get_dataframes_for_training_edge_without_contact():
 
 def get_model_inputs(df, x_labels, test_size = 0.05):
     print('testing inputs: {0}'.format(x_labels))
+    print(df.shape)
     x, y = [], []
 
     #TODO: vectorize
@@ -422,42 +412,46 @@ def get_model_inputs(df, x_labels, test_size = 0.05):
 
 def get_loc_model():
     try:
-        loc_model = load_model(files_loc + 'cnn_full_loc2.h5', custom_objects={'mean_iou': mean_iou, 'IOU_calc_loss':IOU_calc_loss})
+        loc_model = load_model(files_loc + 'cnn_full_loc2.h5', custom_objects={'IOU_calc_loss':IOU_calc_loss})
     except:
         traceback.print_exc()
         df_loc = get_dataframes_for_training_location()
 
         x_train, x_test, y_train, y_test = get_model_inputs(df_loc, x_labels=['input'])
+
+        epochs = max_training_iter//x_train.shape[0]
         loc_model = get_cnn()
-        loc_model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=5)
+        loc_model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=epochs)
         loc_model.save(files_loc + 'cnn_full_loc2.h5')
     return loc_model
 
 
 def get_edge_model_with_contact():
     try:
-        edge_model = load_model(files_loc + 'cnn_full_edge_connected_only.h5', custom_objects={'mean_iou': mean_iou, 'IOU_calc_loss':IOU_calc_loss})
+        edge_model = load_model(files_loc + 'cnn_full_edge_connected_only2.h5', custom_objects={'IOU_calc_loss':IOU_calc_loss})
     except:
         traceback.print_exc()
 
         df_edge = get_dataframes_for_training_edge_with_contact()
         x_train, x_test, y_train, y_test = get_model_inputs(df_edge, x_labels=['input'])
+        epochs = max_training_iter // x_train.shape[0]
         edge_model = get_cnn()
-        edge_model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=16)
-        edge_model.save(files_loc + 'cnn_full_edge_connected_only.h5')
+        edge_model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=epochs)
+        edge_model.save(files_loc + 'cnn_full_edge_connected_only2.h5')
     return edge_model
 
 
 def get_edge_model_without_contact():
     try:
-        edge_model = load_model(files_loc + 'cnn_full_edge_not_connected_only.h5', custom_objects={'mean_iou': mean_iou, 'IOU_calc_loss':IOU_calc_loss})
+        edge_model = load_model(files_loc + 'cnn_full_edge_not_connected_only.h5', custom_objects={'IOU_calc_loss':IOU_calc_loss})
     except:
         traceback.print_exc()
 
         df_edge = get_dataframes_for_training_edge_without_contact()
         x_train, x_test, y_train, y_test = get_model_inputs(df_edge, x_labels=['input'])
+        epochs = max_training_iter // x_train.shape[0]
         edge_model = get_cnn()
-        edge_model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=3)
+        edge_model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=epochs)
         edge_model.save(files_loc + 'cnn_full_edge_not_connected_only.h5')
     return edge_model
 
@@ -863,10 +857,11 @@ def run_predictions(loc_model, edge_model_with_contact, edge_model_without_conta
 
 
 def main():
-    loc_model = get_loc_model()
-    print('loc model loaded')
     edge_model_with_contact = get_edge_model_with_contact()
     edge_model_without_contact = get_edge_model_without_contact()
+    loc_model = get_loc_model()
+    print('loc model loaded')
+
     print('edge model loaded')
 
 
