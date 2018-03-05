@@ -188,7 +188,7 @@ def generate_input_image_and_masks():
 
 #augmentation function
 #TODO: add forms of augmentation with changed lighting or a few randomly sligtly altered pixels
-def get_subimages(input_image, gradient, input_mask, transpose = False, rotation = 0, mask_non_zero = True, step_size = 64):
+def get_subimages(input_image, gradient, input_mask, transpose = False, rotation = 0, mask_non_zero = True, step_size = 35):
     if transpose:
         input_image = np.transpose(input_image)
         input_mask = np.transpose(input_mask)
