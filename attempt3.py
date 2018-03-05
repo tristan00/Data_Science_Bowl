@@ -188,7 +188,7 @@ def generate_input_image_and_masks():
 
 #augmentation function
 #TODO: add forms of augmentation with changed lighting or a few randomly sligtly altered pixels
-def get_subimages(input_image, gradient, input_mask, transpose = False, rotation = 0, mask_non_zero = True):
+def get_subimages(input_image, gradient, input_mask, transpose = False, rotation = 0, mask_non_zero = True, step_size = 64):
     if transpose:
         input_image = np.transpose(input_image)
         input_mask = np.transpose(input_mask)
@@ -200,12 +200,10 @@ def get_subimages(input_image, gradient, input_mask, transpose = False, rotation
     max_x_subimages  = (input_image.shape[0])//full_image_read_size[0]
     max_y_subimages = (input_image.shape[1]) // full_image_read_size[1]
 
-    step_size = 35
-
     x_index = 0
     output = []
 
-    while x_index + full_image_read_size[0] < input_image.shape[0]:
+    while x_index + full_image_read_size[0] <= input_image.shape[0]:
         y_index = 0
         while y_index + full_image_read_size[1] < input_image.shape[1]:
             x1 = x_index
@@ -223,25 +221,15 @@ def get_subimages(input_image, gradient, input_mask, transpose = False, rotation
             y_index += step_size
         x_index += step_size
 
-    # output = []
-    # for i in range(max_x_subimages):
-    #     for j in range(max_y_subimages):
-    #         x1 = i*full_image_read_size[0]
-    #         x2 = (1+i)*full_image_read_size[0]
-    #         y1 = j*full_image_read_size[1]
-    #         y2 = (1+j)*full_image_read_size[1]
-    #         next_input = {'input':np.dstack((np.expand_dims(input_image[x1:x2,y1:y2], axis=2),
-    #                                          np.expand_dims(input_gradient[x1:x2,y1:y2], axis=2))),
-    #                        'output':np.expand_dims(input_mask[x1:x2,y1:y2], axis=2)}
-    #
-    #         if np.mean(input_mask[x1:x2,y1:y2]) > 0:
-    #             output.append(next_input)
-    #         #print(next_input['input'].shape, next_input['output'].shape)
     return output
 
 
-def get_image_arrays_for_full_location_training(input_image, masks):
+#TODO: merge input creation functions
+def get_image_arrays_for_full_location_training(tuple_input):
+    # input_image = normalize_image(input_image)
+    input_image, masks = tuple_input
     input_image = normalize_image(input_image)
+    print(input_image.shape)
 
     gradient = gaussian_gradient_magnitude(input_image, sigma=.4)
 
@@ -341,18 +329,19 @@ def get_dataframes_for_training_location():
     gen = generate_input_image_and_masks()
     location_dfs = []
 
-    for count, _ in enumerate(range(max_images)):
-        print(count)
-        try:
-            images, masks = next(gen)
-            location_dfs.append(get_image_arrays_for_full_location_training(images, masks))
-        except StopIteration:
-            traceback.print_exc()
-            break
-
+    # for count, _ in enumerate(range(max_images)):
+    #     print(count)
+    #     try:
+    #         images, masks = next(gen)
+    #         location_dfs.append(get_image_arrays_for_full_location_training(images, masks))
+    #     except StopIteration:
+    #         traceback.print_exc()
+    #         break
+    p = multiprocessing.Pool(processes=4)
+    location_df = pd.concat(list(p.imap(get_image_arrays_for_full_location_training, gen, chunksize=1)))
 
     print('images read')
-    location_df = pd.concat(location_dfs, ignore_index=True)
+    # location_df = pd.concat(location_dfs, ignore_index=True)
     location_df = location_df.sample(frac=1)
 
     return location_df
@@ -456,6 +445,8 @@ def get_edge_model_without_contact():
     return edge_model
 
 
+
+#Ouput producing functions
 def get_outputs_from_flat_array(a):
     on_label = False
 
@@ -502,6 +493,7 @@ def to_output_format(label_dict, np_image, image_name):
     return output_dicts
 
 
+#removes pixels that are alone or ina  cluster smaller than the minimum size
 def get_valid_pixels(locations):
     location_set = set(locations)
     prediction_n_locations = location_set
@@ -543,7 +535,7 @@ def get_valid_pixels(locations):
 
     return valid_locations
 
-
+#extract clusters from set of locations
 def get_nuclei_from_predictions(locations, image_id):
     location_set = set(locations)
     prediction_n_locations = location_set
@@ -599,26 +591,15 @@ def prediction_image_to_location_list(prediction_image):
     return output
 
 
-
-def get_duplicate_values(cluster_dict):
-    count1 = 0
-    full_set = set()
-    for i, j in cluster_dict.items():
-        count1 += len(j)
-        full_set.update(j)
-    if len(full_set) < count1:
-        print('duplicates found')
-
-
+#values to classify loose pixels
 def point_to_cluster_classification_model_features(t):
     return [t[0], t[1], t[0] / (t[1] + 1), (t[1])/(t[0] + 1), t[0]+t[1], (t[0]+t[1])**2, (t[0]+t[1])/((t[0]+t[1] + 1)**2)]
 
 
-#svm was too slow, trying et
+#classify loose pixels into clusters
 def train_cluster_model(clusters, v_locations):
     x = []
     y = []
-
 
     current_points = functools.reduce(operator.or_, [i for _, i in clusters.items()])
     points_to_predict = set(v_locations) - current_points
@@ -802,25 +783,27 @@ def predict_image(loc_model, edge_model_with_contact, edge_model_without_contact
     edges_with_contact.append(predict_subimages(np_image, image_gradient, False, 3, edge_model_with_contact))
     edge_array_with_contact = np.dstack(edges_with_contact)
 
-    edges_without_contact = []
-    edges_without_contact.append(predict_subimages(np_image, image_gradient, False, 0, edge_model_without_contact))
-    edges_without_contact.append(predict_subimages(np_image, image_gradient, False, 1, edge_model_without_contact))
-    edges_without_contact.append(predict_subimages(np_image, image_gradient, False, 2, edge_model_without_contact))
-    edges_without_contact.append(predict_subimages(np_image, image_gradient, False, 3, edge_model_without_contact))
-    edge_array_without_contact = np.dstack(edges_without_contact)
+    # edges_without_contact = []
+    # edges_without_contact.append(predict_subimages(np_image, image_gradient, False, 0, edge_model_without_contact))
+    # edges_without_contact.append(predict_subimages(np_image, image_gradient, False, 1, edge_model_without_contact))
+    # edges_without_contact.append(predict_subimages(np_image, image_gradient, False, 2, edge_model_without_contact))
+    # edges_without_contact.append(predict_subimages(np_image, image_gradient, False, 3, edge_model_without_contact))
+    # edge_array_without_contact = np.dstack(edges_without_contact)
 
     edge_mean_with_contact = np.nanmean(edge_array_with_contact, 2)
     print(edge_mean_with_contact.shape)
     edge_predictions_with_contact = prediction_f(edge_mean_with_contact)
 
-    edge_mean_without_contact = np.nanmean(edge_array_without_contact, 2)
-    print(edge_mean_without_contact.shape)
-    edge_predictions_without_contact = prediction_f(edge_mean_without_contact)
+    # edge_mean_without_contact = np.nanmean(edge_array_without_contact, 2)
+    # print(edge_mean_without_contact.shape)
+    # edge_predictions_without_contact = prediction_f(edge_mean_without_contact)
+    edge_predictions_without_contact =np_image.copy()
+    edge_predictions_without_contact[:] = 0
 
     input_dict = {'output_n':nuclie_predictions, 'edges_with_contact': edge_predictions_with_contact, 'edges_without_contact': edge_predictions_without_contact, 'image_id':image_id, 'np_image':np_image}
 
     output_dicts = []
-    output_dicts.extend(get_outputs2(input_dict))
+    output_dicts.extend(get_outputs(input_dict))
     return output_dicts
 
 
@@ -850,12 +833,12 @@ def run_predictions(loc_model, edge_model_with_contact, edge_model_without_conta
 
 def main():
     edge_model_with_contact = get_edge_model_with_contact()
-    edge_model_without_contact = get_edge_model_without_contact()
+    #edge_model_without_contact = get_edge_model_without_contact()
+    edge_model_without_contact = None
     loc_model = get_loc_model()
     print('loc model loaded')
 
     print('edge model loaded')
-
 
     run_predictions(loc_model, edge_model_with_contact, edge_model_without_contact)
 
