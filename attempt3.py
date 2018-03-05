@@ -33,6 +33,8 @@ import ast
 import lightgbm
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, Normalizer, QuantileTransformer
 
+import gc
+
 config = configparser.ConfigParser()
 config.read('properties.ini')
 section = 'main_pc'
@@ -161,6 +163,9 @@ def get_cnn():
     return model
 
 
+
+
+#Section: Generate training sets
 def generate_input_image_and_masks():
     folders = glob.glob(files_loc + 'stage1_train/*/')
     random.shuffle(folders)
@@ -188,7 +193,7 @@ def generate_input_image_and_masks():
 
 #augmentation function
 #TODO: add forms of augmentation with changed lighting or a few randomly sligtly altered pixels
-def get_subimages(input_image, gradient, input_mask, transpose = False, rotation = 0, mask_non_zero = True, step_size = 35):
+def get_subimages(input_image, gradient, input_mask, transpose = False, rotation = 0, mask_non_zero = True, step_size = 60):
     if transpose:
         input_image = np.transpose(input_image)
         input_mask = np.transpose(input_mask)
@@ -381,6 +386,9 @@ def get_model_inputs(df, x_labels, test_size = 0.05):
         x.append(np.hstack([i[x_label] for x_label in x_labels]))
         y.append(i['output'])
 
+    del df
+
+    gc.collect()
     x = np.array(x)
     y = np.array(y)
     #x = np.nan_to_num(x)
@@ -399,6 +407,8 @@ def get_model_inputs(df, x_labels, test_size = 0.05):
     return x_train, x_test, y_train, y_test
 
 
+
+#Section: Train models
 def get_loc_model():
     try:
         loc_model = load_model(files_loc + 'cnn_full_loc2.h5', custom_objects={'IOU_calc_loss':IOU_calc_loss})
@@ -446,7 +456,7 @@ def get_edge_model_without_contact():
 
 
 
-#Ouput producing functions
+#Section: Format chaning functions
 def get_outputs_from_flat_array(a):
     on_label = False
 
@@ -493,6 +503,37 @@ def to_output_format(label_dict, np_image, image_name):
     return output_dicts
 
 
+
+
+#Section: Generate testing files
+def run_tests():
+    folders = glob.glob(files_loc + 'stage1_train/*/')
+    random.shuffle(folders)
+
+    output_dicts = []
+
+    for folder in folders:
+        image_location = glob.glob(folder + 'images/*')[0]
+        mask_locations = glob.glob(folder + 'masks/*')[0]
+        start_image = Image.open(image_location).convert('LA')
+        image_id = os.path.basename(image_location).split('.')[0]
+        if len(image_id) < 5:
+            print('here')
+        np_image = np.array(start_image.getdata())[:, 0]
+        np_image = np_image.reshape(start_image.size[1], start_image.size[0])
+
+        np_image = normalize_image(np_image)
+
+        output_dicts.extend(predict_image(loc_model, edge_model_with_contact, edge_model_without_contact, np_image, image_id))
+
+    df = pd.DataFrame.from_dict(output_dicts)
+    df = df[['ImageId', 'EncodedPixels']]
+    df.to_csv('output.csv', index = False)
+
+
+
+
+#Section: Generate output
 #removes pixels that are alone or ina  cluster smaller than the minimum size
 def get_valid_pixels(locations):
     location_set = set(locations)
@@ -833,8 +874,8 @@ def run_predictions(loc_model, edge_model_with_contact, edge_model_without_conta
 
 def main():
     edge_model_with_contact = get_edge_model_with_contact()
-    #edge_model_without_contact = get_edge_model_without_contact()
-    edge_model_without_contact = None
+    edge_model_without_contact = get_edge_model_without_contact()
+    #edge_model_without_contact = None
     loc_model = get_loc_model()
     print('loc model loaded')
 
