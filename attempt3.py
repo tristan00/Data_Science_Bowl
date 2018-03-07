@@ -304,15 +304,19 @@ def get_image_arrays_for_full_edge_training_without_contact(tuple_input):
     mask_sum = input_image.copy()
     mask_sum[:] = 0
 
+    mask_sum = input_image.copy()
+    mask_sum[:] = 0
+
     vectorized = np.vectorize(lambda t: 1 if t > 0 else 0)
-    vectorized2 = np.vectorize(lambda t: 1 if t == 1 else 0)
+    vectorized2 = np.vectorize(lambda t: 1 if t > 1 else 0)
     for m in masks:
         temp_edge = gaussian_gradient_magnitude(m, sigma=.4)
         temp_edge = temp_edge > 0
         mask_sum = np.add(temp_edge.astype(int), mask_sum)
 
-    mask_sum = mask_sum == 1
+    mask_sum = mask_sum > 1
     mask_sum = mask_sum.astype(int)
+
     output = []
 
     print(np.mean(mask_sum))
@@ -506,7 +510,7 @@ def to_output_format(label_dict, np_image, image_name):
 
 
 #Section: Generate testing files
-def run_tests():
+def run_tests(loc_model, edge_model_with_contact, edge_model_without_contact):
     folders = glob.glob(files_loc + 'stage1_train/*/')
     random.shuffle(folders)
 
@@ -523,8 +527,9 @@ def run_tests():
         np_image = np_image.reshape(start_image.size[1], start_image.size[0])
 
         np_image = normalize_image(np_image)
+        output = predict_image(loc_model, edge_model_with_contact, edge_model_without_contact, np_image, image_id)
 
-        output_dicts.extend(predict_image(loc_model, edge_model_with_contact, edge_model_without_contact, np_image, image_id))
+        output_dicts.extend(output['output_format'])
 
     df = pd.DataFrame.from_dict(output_dicts)
     df = df[['ImageId', 'EncodedPixels']]
@@ -763,7 +768,7 @@ def get_outputs(input_dict):
     clusters = split_clusters(clusters, edge_with_contact_locations, edge_without_contact_locations, np_image, image_id)
     clusters = train_cluster_model(clusters, v_locations)
     formated_output = to_output_format(clusters, np_image, image_id)
-    return formated_output
+    return formated_output, clusters
 
 
 def predict_subimages(input_image, gradient, transpose, rotation, model):
@@ -824,28 +829,28 @@ def predict_image(loc_model, edge_model_with_contact, edge_model_without_contact
     edges_with_contact.append(predict_subimages(np_image, image_gradient, False, 3, edge_model_with_contact))
     edge_array_with_contact = np.dstack(edges_with_contact)
 
-    # edges_without_contact = []
-    # edges_without_contact.append(predict_subimages(np_image, image_gradient, False, 0, edge_model_without_contact))
-    # edges_without_contact.append(predict_subimages(np_image, image_gradient, False, 1, edge_model_without_contact))
-    # edges_without_contact.append(predict_subimages(np_image, image_gradient, False, 2, edge_model_without_contact))
-    # edges_without_contact.append(predict_subimages(np_image, image_gradient, False, 3, edge_model_without_contact))
-    # edge_array_without_contact = np.dstack(edges_without_contact)
+    edges_without_contact = []
+    edges_without_contact.append(predict_subimages(np_image, image_gradient, False, 0, edge_model_without_contact))
+    edges_without_contact.append(predict_subimages(np_image, image_gradient, False, 1, edge_model_without_contact))
+    edges_without_contact.append(predict_subimages(np_image, image_gradient, False, 2, edge_model_without_contact))
+    edges_without_contact.append(predict_subimages(np_image, image_gradient, False, 3, edge_model_without_contact))
+    edge_array_without_contact = np.dstack(edges_without_contact)
 
     edge_mean_with_contact = np.nanmean(edge_array_with_contact, 2)
     print(edge_mean_with_contact.shape)
     edge_predictions_with_contact = prediction_f(edge_mean_with_contact)
 
-    # edge_mean_without_contact = np.nanmean(edge_array_without_contact, 2)
-    # print(edge_mean_without_contact.shape)
-    # edge_predictions_without_contact = prediction_f(edge_mean_without_contact)
-    edge_predictions_without_contact =np_image.copy()
-    edge_predictions_without_contact[:] = 0
+    edge_mean_without_contact = np.nanmean(edge_array_without_contact, 2)
+    print(edge_mean_without_contact.shape)
+    edge_predictions_without_contact = prediction_f(edge_mean_without_contact)
+    # edge_predictions_without_contact =np_image.copy()
+    # edge_predictions_without_contact[:] = 0
 
     input_dict = {'output_n':nuclie_predictions, 'edges_with_contact': edge_predictions_with_contact, 'edges_without_contact': edge_predictions_without_contact, 'image_id':image_id, 'np_image':np_image}
 
-    output_dicts = []
-    output_dicts.extend(get_outputs(input_dict))
-    return output_dicts
+    output_dicts, clusters= get_outputs(input_dict)
+    #output_dicts.extend()
+    return output_dicts, clusters
 
 
 def run_predictions(loc_model, edge_model_with_contact, edge_model_without_contact):
