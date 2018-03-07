@@ -30,9 +30,9 @@ import h5py
 import configparser
 from sklearn import preprocessing
 import ast
-import lightgbm
+import pickle
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, Normalizer, QuantileTransformer
-
+import shutil
 import gc
 
 config = configparser.ConfigParser()
@@ -510,30 +510,56 @@ def to_output_format(label_dict, np_image, image_name):
 
 
 #Section: Generate testing files
+def create_directory(directory):
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+    return directory
+
+
 def run_tests(loc_model, edge_model_with_contact, edge_model_without_contact):
     folders = glob.glob(files_loc + 'stage1_train/*/')
+
+    output_dir = create_directory(files_loc + '/training_output/')
     random.shuffle(folders)
 
     output_dicts = []
 
     for folder in folders:
         image_location = glob.glob(folder + 'images/*')[0]
-        mask_locations = glob.glob(folder + 'masks/*')[0]
+        mask_locations = glob.glob(folder + 'masks/*')
         start_image = Image.open(image_location).convert('LA')
         image_id = os.path.basename(image_location).split('.')[0]
-        if len(image_id) < 5:
-            print('here')
+
+        image_output_dir = create_directory(output_dir + image_id + '/')
+        create_directory(image_output_dir+ image_id+ '_input' + '/')
+        src_image_output_loc = image_output_dir+ image_id+ '_input' + '/' + image_id + '.png'
+        shutil.copy(image_location, src_image_output_loc)
+
+        create_directory(image_output_dir+ image_id+ '_input' + '/')
+        pre_image_output_loc = image_output_dir+ image_id+ '_preprocessed' + '/' + image_id + '.png'
+        #shutil.copy(image_location, src_image_output_loc)
+        scipy.misc.imsave(pre_image_output_loc, start_image)
+
+        mask_output_dir = create_directory(image_output_dir + image_id + '_masks' + '/' )
+        for m in mask_locations:
+            mask_id = os.path.basename(image_location).split('.')[0]
+            mask_output_loc = mask_output_dir + mask_id + '.png'
+            shutil.copy(m, mask_output_loc)
+
+
         np_image = np.array(start_image.getdata())[:, 0]
         np_image = np_image.reshape(start_image.size[1], start_image.size[0])
 
         np_image = normalize_image(np_image)
-        output = predict_image(loc_model, edge_model_with_contact, edge_model_without_contact, np_image, image_id)
+        output, clusters, nuclie_predictions, edge_predictions_with_contact, edge_predictions_without_contact = \
+            predict_image(loc_model, edge_model_with_contact, edge_model_without_contact, np_image, image_id)
 
-        output_dicts.extend(output['output_format'])
-
-    df = pd.DataFrame.from_dict(output_dicts)
-    df = df[['ImageId', 'EncodedPixels']]
-    df.to_csv('output.csv', index = False)
+        pred_output_dir = create_directory(image_output_dir + image_id + '_predictions' + '/')
+        scipy.misc.imsave(pred_output_dir + 'predicted_touching_edges.png', edge_predictions_with_contact)
+        scipy.misc.imsave(pred_output_dir + 'predicted_non_touching_edges.png', edge_predictions_without_contact)
+        scipy.misc.imsave(pred_output_dir + 'predicted_nuclei_locations.png', nuclie_predictions)
+        with open(pred_output_dir + 'predicted_clusters.plk') as output_plk:
+            pickle.dump(clusters, output_plk)
 
 
 
@@ -755,7 +781,6 @@ def split_clusters(clusters, edges1, edges2, np_image, image_id):
     return adj_clusters
 
 
-#expirementing with classifying edge pixels
 def get_outputs(input_dict):
     output, edges_with_contact, edges_without_contact, np_image, image_id = input_dict['output_n'], input_dict['edges_with_contact'], input_dict['edges_without_contact'], input_dict['np_image'], input_dict['image_id']
 
@@ -848,9 +873,9 @@ def predict_image(loc_model, edge_model_with_contact, edge_model_without_contact
 
     input_dict = {'output_n':nuclie_predictions, 'edges_with_contact': edge_predictions_with_contact, 'edges_without_contact': edge_predictions_without_contact, 'image_id':image_id, 'np_image':np_image}
 
-    output_dicts, clusters= get_outputs(input_dict)
+    output_dicts, clusters = get_outputs(input_dict)
     #output_dicts.extend()
-    return output_dicts, clusters
+    return output_dicts, clusters, nuclie_predictions, edge_predictions_with_contact, edge_predictions_without_contact
 
 
 def run_predictions(loc_model, edge_model_with_contact, edge_model_without_contact):
@@ -869,8 +894,8 @@ def run_predictions(loc_model, edge_model_with_contact, edge_model_without_conta
         np_image = np_image.reshape(start_image.size[1], start_image.size[0])
 
         np_image = normalize_image(np_image)
-
-        output_dicts.extend(predict_image(loc_model, edge_model_with_contact, edge_model_without_contact, np_image, image_id))
+        output, _, _, _, _ = predict_image(loc_model, edge_model_with_contact, edge_model_without_contact, np_image, image_id)
+        output_dicts.extend(output)
 
     df = pd.DataFrame.from_dict(output_dicts)
     df = df[['ImageId', 'EncodedPixels']]
