@@ -291,7 +291,7 @@ def generate_inputs(data_type, batch_size):
 
 def get_model(data_type):
     try:
-        edge_model = load_model(files_loc + 'cnn_{}.h5'.format(data_type), custom_objects={'IOU_calc_loss':IOU_calc_loss})
+        edge_model = load_model(files_loc + 'cnn_{0}.h5'.format(data_type), custom_objects={'IOU_calc_loss':IOU_calc_loss})
     except:
         traceback.print_exc()
 
@@ -791,6 +791,8 @@ def main():
     # edge_model_without_contact = get_edge_model_without_contact()
     # #edge_model_without_contact = None
     loc_model = get_model('loc')
+    edge_model_with_contact = get_model('touching_edges')
+    edge_model_without_contact = get_model('non_touching_edges')
     print('loc model loaded')
 
     print('edge model loaded')
