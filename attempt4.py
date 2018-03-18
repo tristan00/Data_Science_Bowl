@@ -193,7 +193,7 @@ def generate_input_image_and_masks():
 
 #augmentation function
 #TODO: add forms of augmentation with changed lighting or a few randomly sligtly altered pixels
-def get_subimages(input_image, gradient, input_mask, transpose = False, rotation = 0, mask_non_zero = True, step_size = 60):
+def get_subimages(input_image, gradient, input_mask, transpose = False, rotation = 0, mask_non_zero = True, step_size = 15):
     if transpose:
         input_image = np.transpose(input_image)
         input_mask = np.transpose(input_mask)
@@ -202,15 +202,13 @@ def get_subimages(input_image, gradient, input_mask, transpose = False, rotation
     input_mask = np.rot90(input_mask, rotation)
     input_gradient = np.rot90(gradient, rotation)
 
-    max_x_subimages  = (input_image.shape[0])//full_image_read_size[0]
-    max_y_subimages = (input_image.shape[1]) // full_image_read_size[1]
 
     x_index = 0
     output = []
 
     while x_index + full_image_read_size[0] <= input_image.shape[0]:
         y_index = 0
-        while y_index + full_image_read_size[1] < input_image.shape[1]:
+        while y_index + full_image_read_size[1] <= input_image.shape[1]:
             x1 = x_index
             x2 = x_index + full_image_read_size[0]
             y1 = y_index
@@ -221,66 +219,42 @@ def get_subimages(input_image, gradient, input_mask, transpose = False, rotation
                                                   np.expand_dims(input_gradient[x1:x2, y1:y2], axis=2))),
                               'output': np.expand_dims(input_mask[x1:x2, y1:y2], axis=2)}
                 output.append(next_input)
-                print('output added', x_index, y_index)
 
             y_index += step_size
         x_index += step_size
 
     return output
 
-
-#TODO: merge input creation functions
-def get_image_arrays_for_full_location_training(tuple_input):
-    # input_image = normalize_image(input_image)
-    input_image, masks = tuple_input
+def get_image_arrays(input_tuple):
+    input_image, masks, data_type = input_tuple
     input_image = normalize_image(input_image)
-    print(input_image.shape)
-
     gradient = gaussian_gradient_magnitude(input_image, sigma=.4)
 
-    mask_sum = functools.reduce(operator.add, masks)
-    mask_sum = mask_sum > 0
-    mask_sum = mask_sum.astype(int)
-    # vectorized = np.vectorize(lambda t: 1 if t>0 else 0)
-    # mask_sum = vectorized(mask_sum)
+    if data_type == 'loc':
+        mask_sum = functools.reduce(operator.add, masks)
+        mask_sum = mask_sum > 0
+        mask_sum = mask_sum.astype(int)
+    elif data_type == 'touching_edges':
+        mask_sum = input_image.copy()
+        mask_sum[:] = 0
+
+        for m in masks:
+            temp_edge = gaussian_gradient_magnitude(m, sigma=.4)
+            temp_edge = temp_edge > 0
+            mask_sum = np.add(temp_edge.astype(int), mask_sum)
+
+        mask_sum = mask_sum > 1
+        mask_sum = mask_sum.astype(int)
+    else:
+        mask_sum = functools.reduce(operator.add, masks)
+        mask_sum = mask_sum > 0
+        mask_sum = mask_sum.astype(int)
+
+        res = np.subtract(gradient, mask_sum)
+        res = res > 0
+        mask_sum = res.astype(int)
 
     output = []
-    output.extend(get_subimages(input_image, gradient, mask_sum, transpose=False, rotation=0))
-    output.extend(get_subimages(input_image, gradient, mask_sum, transpose=False, rotation=1))
-    output.extend(get_subimages(input_image, gradient, mask_sum, transpose=False, rotation=2))
-    output.extend(get_subimages(input_image, gradient, mask_sum, transpose=False, rotation=3))
-    output.extend(get_subimages(input_image, gradient, mask_sum, transpose=True, rotation=0))
-    output.extend(get_subimages(input_image, gradient, mask_sum, transpose=True, rotation=1))
-    output.extend(get_subimages(input_image, gradient, mask_sum, transpose=True, rotation=2))
-    output.extend(get_subimages(input_image, gradient, mask_sum, transpose=True, rotation=3))
-
-    return pd.DataFrame(output)
-
-
-def get_image_arrays_for_full_edge_training_with_contact(tuple_input):
-    input_image, masks = tuple_input
-    input_image = normalize_image(input_image)
-    print(input_image.shape)
-
-    gradient = gaussian_gradient_magnitude(input_image, sigma=.4)
-
-    mask_sum = input_image.copy()
-    mask_sum[:] = 0
-
-    vectorized = np.vectorize(lambda t: 1 if t > 0 else 0)
-    vectorized2 = np.vectorize(lambda t: 1 if t > 1 else 0)
-    for m in masks:
-        temp_edge = gaussian_gradient_magnitude(m, sigma=.4)
-        temp_edge = temp_edge > 0
-        mask_sum = np.add(temp_edge.astype(int), mask_sum)
-
-    mask_sum = mask_sum > 1
-    mask_sum = mask_sum.astype(int)
-
-    output = []
-
-    print(np.mean(mask_sum))
-
     if np.mean(mask_sum) > 0:
         output.extend(get_subimages(input_image, gradient, mask_sum, transpose=False, rotation=0))
         output.extend(get_subimages(input_image, gradient, mask_sum, transpose=False, rotation=1))
@@ -294,170 +268,41 @@ def get_image_arrays_for_full_edge_training_with_contact(tuple_input):
     return pd.DataFrame(output)
 
 
-def get_image_arrays_for_full_edge_training_without_contact(tuple_input):
-    input_image, masks = tuple_input
-    input_image = normalize_image(input_image)
-    print(input_image.shape)
-
-    gradient = gaussian_gradient_magnitude(input_image, sigma=.4)
-
-    mask_sum = input_image.copy()
-    mask_sum[:] = 0
-
-    mask_sum = input_image.copy()
-    mask_sum[:] = 0
-
-    vectorized = np.vectorize(lambda t: 1 if t > 0 else 0)
-    vectorized2 = np.vectorize(lambda t: 1 if t > 1 else 0)
-    for m in masks:
-        temp_edge = gaussian_gradient_magnitude(m, sigma=.4)
-        temp_edge = temp_edge > 0
-        mask_sum = np.add(temp_edge.astype(int), mask_sum)
-
-    mask_sum = mask_sum > 1
-    mask_sum = mask_sum.astype(int)
-
-    output = []
-
-    print(np.mean(mask_sum))
-
-    if np.mean(mask_sum) > 0:
-        output.extend(get_subimages(input_image, gradient, mask_sum, transpose=False, rotation=0))
-        output.extend(get_subimages(input_image, gradient, mask_sum, transpose=False, rotation=1))
-        output.extend(get_subimages(input_image, gradient, mask_sum, transpose=False, rotation=2))
-        output.extend(get_subimages(input_image, gradient, mask_sum, transpose=False, rotation=3))
-        output.extend(get_subimages(input_image, gradient, mask_sum, transpose=True, rotation=0))
-        output.extend(get_subimages(input_image, gradient, mask_sum, transpose=True, rotation=1))
-        output.extend(get_subimages(input_image, gradient, mask_sum, transpose=True, rotation=2))
-        output.extend(get_subimages(input_image, gradient, mask_sum, transpose=True, rotation=3))
-
-    return pd.DataFrame(output)
-
-
-def get_dataframes_for_training_location():
+def generate_inputs(data_type, batch_size):
     gen = generate_input_image_and_masks()
-    location_dfs = []
+    dfs = []
+    concat_df = pd.DataFrame()
+    while True:
+        try:
+            image, mask = next(gen)
+        except:
+            gen = generate_input_image_and_masks()
+            continue
+        if concat_df.shape[0] < batch_size:
+            dfs.append(get_image_arrays((image, mask, data_type)))
 
-    # for count, _ in enumerate(range(max_images)):
-    #     print(count)
-    #     try:
-    #         images, masks = next(gen)
-    #         location_dfs.append(get_image_arrays_for_full_location_training(images, masks))
-    #     except StopIteration:
-    #         traceback.print_exc()
-    #         break
-    p = multiprocessing.Pool(processes=4)
-    location_df = pd.concat(list(p.imap(get_image_arrays_for_full_location_training, gen, chunksize=1)))
+        concat_df = pd.concat(dfs)
+        if concat_df.shape[0] >= batch_size:
+            concat_df = concat_df[0:batch_size]
+            x = np.array([i['input'] for _, i in concat_df.iterrows()])
+            y = np.array([i['output'] for _, i in concat_df.iterrows()])
+            yield x, y
+            dfs = [concat_df[batch_size:]]
 
-    print('images read')
-    # location_df = pd.concat(location_dfs, ignore_index=True)
-    location_df = location_df.sample(frac=1)
-
-    return location_df
-
-
-def get_dataframes_for_training_edge_with_contact():
-    gen = generate_input_image_and_masks()
-
-    p = multiprocessing.Pool(processes=4)
-    edge_df = pd.concat(list(p.imap(get_image_arrays_for_full_edge_training_with_contact, gen, chunksize=1)))
-    # get_image_arrays_for_full_edge_training_with_contact(gen.__next__)
-    print('images read')
-    edge_df = edge_df.sample(frac=1)
-
-    return edge_df
-
-
-def get_dataframes_for_training_edge_without_contact():
-    gen = generate_input_image_and_masks()
-
-    p = multiprocessing.Pool(processes=4)
-    edge_df = pd.concat(list(p.imap(get_image_arrays_for_full_edge_training_without_contact, gen, chunksize=1)))
-
-    print('images read')
-    edge_df = edge_df.sample(frac=1)
-
-    return edge_df
-
-
-def get_model_inputs(df, x_labels, test_size = 0.05):
-    print('testing inputs: {0}'.format(x_labels))
-    print(df.shape)
-    x, y = [], []
-
-    #TODO: vectorize
-    for _, i in df.iterrows():
-        x.append(np.hstack([i[x_label] for x_label in x_labels]))
-        y.append(i['output'])
-
-    del df
-
-    gc.collect()
-    x = np.array(x)
-    y = np.array(y)
-    #x = np.nan_to_num(x)
-
-    print('arrays processed')
-
-    print(x.shape, y.shape)
-    x_train = x[0:int((1-test_size)*x.shape[0])]
-    x_test = x[int((1-test_size)*x.shape[0]):]
-    y_train = y[0:int((1-test_size)*x.shape[0])]
-    y_test = y[int((1-test_size)*x.shape[0]):]
-    print(x_train.shape, x_test.shape, y_train.shape, y_test.shape)
-
-    print('inputs preprocessed')
-
-    return x_train, x_test, y_train, y_test
-
-
-
-#Section: Train models
-def get_loc_model():
+def get_model(data_type):
     try:
-        loc_model = load_model(files_loc + 'cnn_full_loc2.h5', custom_objects={'IOU_calc_loss':IOU_calc_loss})
-    except:
-        traceback.print_exc()
-        df_loc = get_dataframes_for_training_location()
-
-        x_train, x_test, y_train, y_test = get_model_inputs(df_loc, x_labels=['input'])
-
-        epochs = max_training_iter//x_train.shape[0]
-        loc_model = get_cnn()
-        loc_model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=epochs)
-        loc_model.save(files_loc + 'cnn_full_loc2.h5')
-    return loc_model
-
-
-def get_edge_model_with_contact():
-    try:
-        edge_model = load_model(files_loc + 'cnn_full_edge_connected_only2.h5', custom_objects={'IOU_calc_loss':IOU_calc_loss})
+        edge_model = load_model(files_loc + 'cnn_{}.h5'.format(data_type), custom_objects={'IOU_calc_loss':IOU_calc_loss})
     except:
         traceback.print_exc()
 
-        df_edge = get_dataframes_for_training_edge_with_contact()
-        x_train, x_test, y_train, y_test = get_model_inputs(df_edge, x_labels=['input'])
-        epochs = max_training_iter // x_train.shape[0]
-        edge_model = get_cnn()
-        edge_model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=epochs)
-        edge_model.save(files_loc + 'cnn_full_edge_connected_only2.h5')
+        gen = generate_inputs(data_type, 32)
+        model = get_cnn()
+        model.fit_generator(generator=gen,
+                            steps_per_epoch=10000,
+                            epochs=5)
+
+        model.save(files_loc + 'cnn_{}.h5'.format(data_type))
     return edge_model
-
-
-def get_edge_model_without_contact():
-    try:
-        edge_model = load_model(files_loc + 'cnn_full_edge_not_connected_only.h5', custom_objects={'IOU_calc_loss':IOU_calc_loss})
-    except:
-        traceback.print_exc()
-
-        df_edge = get_dataframes_for_training_edge_without_contact()
-        x_train, x_test, y_train, y_test = get_model_inputs(df_edge, x_labels=['input'])
-        epochs = max_training_iter // x_train.shape[0]
-        edge_model = get_cnn()
-        edge_model.fit(x_train, y_train, validation_data=(x_test, y_test), epochs=epochs)
-        edge_model.save(files_loc + 'cnn_full_edge_not_connected_only.h5')
-    return edge_model
-
 
 
 #Section: Format chaning functions
@@ -505,8 +350,6 @@ def to_output_format(label_dict, np_image, image_name):
         output_dicts.append(output_dict)
 
     return output_dicts
-
-
 
 
 #Section: Generate testing files
@@ -835,8 +678,10 @@ def predict_subimages(input_image, gradient, transpose, rotation, model):
     outputs = []
     step_size = 16
 
-    #input_dict = {}
+    input_list = []
+    input_map = {}
 
+    count = 0
     while x_index + full_image_read_size[0] < input_image.shape[0]:
         y_index = 0
 
@@ -851,46 +696,26 @@ def predict_subimages(input_image, gradient, transpose, rotation, model):
             temp_gradient = input_gradient[x1:x2,y1:y2]
             model_input = np.dstack([np.expand_dims(temp_image, axis=2), np.expand_dims(temp_gradient, axis=2)])
             model_input = np.expand_dims(model_input, axis = 0)
-            prediction = np.squeeze(model.predict(model_input))
-            pad = np.zeros(input_image.shape)
-            pad[:] = np.nan
-            pad[x1:x2, y1:y2] = prediction
-            rotated_output = np.rot90(pad, 4 - rotation)
-            row_list.append(rotated_output)
-            #outputs.append(rotated_output)
+            model_input = np.squeeze(model_input)
+            input_list.append(model_input)
+            input_map[count] = (x1,x2,y1,y2)
+            count += 1
+            y_index+=step_size
+        x_index+=step_size
 
+    model_inputs = np.array(input_list)
+    preds = model.predict(model_inputs)
 
-            y_index += step_size
-        outputs.append(np.nanmean(np.dstack(row_list), 2))
-        x_index += step_size
+    pred_list = []
+    for count, i in enumerate(preds):
+        pad = np.zeros(input_image.shape)
+        pad[:] = np.nan
+        x1, x2, y1, y2 = input_map[count]
+        pad[x1:x2, y1:y2] = np.squeeze(i)
+        rotated_output = np.rot90(pad, 4 - rotation)
+        pred_list.append(rotated_output)
 
-
-    # max_x_subimages  = (input_image.shape[0])//full_image_read_size[0]
-    # max_y_subimages = (input_image.shape[1]) // full_image_read_size[1]
-    #
-    # output = []
-    # for i in range(max_x_subimages):
-    #     predictions = []
-    #     for j in range(max_y_subimages):
-    #         x1 = i * full_image_read_size[0]
-    #         x2 = (1 + i) * full_image_read_size[0]
-    #         y1 = j * full_image_read_size[0]
-    #         y2 = (1 + j) * full_image_read_size[0]
-    #         temp_image = input_image[x1:x2,y1:y2]
-    #         temp_gradient = input_gradient[x1:x2,y1:y2]
-    #         model_input = np.dstack([np.expand_dims(temp_image, axis=2), np.expand_dims(temp_gradient, axis=2)])
-    #         model_input = np.expand_dims(model_input, axis = 0)
-    #         prediction = model.predict(model_input)
-    #         prediction = np.squeeze(prediction)
-    #         predictions.append(prediction)
-    #     output.append(np.concatenate(predictions, 1))
-    # output = np.concatenate(output, 0)
-    # pad = np.zeros(input_image.shape)
-    # pad[:] = np.nan
-    # pad[:output.shape[0],:output.shape[1]] = output
-    # output = pad
-    #
-    # rotated_output = np.rot90(output, 4-rotation)
+    outputs.append(np.nanmean(np.dstack(pred_list), 2))
     return outputs
 
 
@@ -924,11 +749,9 @@ def predict_image(loc_model, edge_model_with_contact, edge_model_without_contact
     edge_array_without_contact = np.dstack(edges_with_contact)
 
     edge_mean_with_contact = np.nanmean(edge_array_with_contact, 2)
-    print(edge_mean_with_contact.shape)
     edge_predictions_with_contact = prediction_f(edge_mean_with_contact)
 
     edge_mean_without_contact = np.nanmean(edge_array_without_contact, 2)
-    print(edge_mean_without_contact.shape)
     edge_predictions_without_contact = prediction_f(edge_mean_without_contact)
     # edge_predictions_without_contact =np_image.copy()
     # edge_predictions_without_contact[:] = 0
@@ -940,60 +763,10 @@ def predict_image(loc_model, edge_model_with_contact, edge_model_without_contact
     return output_dicts, clusters, nuclie_predictions, edge_predictions_with_contact, edge_predictions_without_contact
 
 
-def predict_image2(input_t):
-    loc_model, edge_model_with_contact, edge_model_without_contact, np_image, image_id = input_t
-    image_gradient = gaussian_gradient_magnitude(np_image, sigma=.4)
-    results = []
-    results.extend(predict_subimages(np_image, image_gradient, False, 0, loc_model))
-    results.extend(predict_subimages(np_image, image_gradient, False, 1, loc_model))
-    results.extend(predict_subimages(np_image, image_gradient, False, 2, loc_model))
-    results.extend(predict_subimages(np_image, image_gradient, False, 3, loc_model))
-    result_array = np.dstack(results)
-
-    result_mean = np.nanmean(result_array, 2)
-    print(result_mean.shape)
-
-    prediction_f = np.vectorize(lambda t: 1 if t > confidence_threshold else 0)
-    nuclie_predictions = prediction_f(result_mean)
-
-    edges_with_contact = []
-    edges_with_contact.extend(predict_subimages(np_image, image_gradient, False, 0, edge_model_with_contact))
-    edges_with_contact.extend(predict_subimages(np_image, image_gradient, False, 1, edge_model_with_contact))
-    edges_with_contact.extend(predict_subimages(np_image, image_gradient, False, 2, edge_model_with_contact))
-    edges_with_contact.extend(predict_subimages(np_image, image_gradient, False, 3, edge_model_with_contact))
-    edge_array_with_contact = np.dstack(edges_with_contact)
-
-    edges_without_contact = []
-    # edges_without_contact.extend(predict_subimages(np_image, image_gradient, False, 0, edge_model_without_contact))
-    # edges_without_contact.extend(predict_subimages(np_image, image_gradient, False, 1, edge_model_without_contact))
-    # edges_without_contact.extend(predict_subimages(np_image, image_gradient, False, 2, edge_model_without_contact))
-    # edges_without_contact.extend(predict_subimages(np_image, image_gradient, False, 3, edge_model_without_contact))
-    edge_array_without_contact = np.dstack(edges_with_contact)
-
-    edge_mean_with_contact = np.nanmean(edge_array_with_contact, 2)
-    print(edge_mean_with_contact.shape)
-    edge_predictions_with_contact = prediction_f(edge_mean_with_contact)
-
-    edge_mean_without_contact = np.nanmean(edge_array_without_contact, 2)
-    print(edge_mean_without_contact.shape)
-    edge_predictions_without_contact = prediction_f(edge_mean_without_contact)
-    # edge_predictions_without_contact =np_image.copy()
-    # edge_predictions_without_contact[:] = 0
-
-    input_dict = {'output_n':nuclie_predictions, 'edges_with_contact': edge_predictions_with_contact, 'edges_without_contact': edge_predictions_without_contact, 'image_id':image_id, 'np_image':np_image}
-
-    output_dicts, clusters = get_outputs(input_dict)
-    #output_dicts.extend()
-    return [output_dicts]
-
-
 def run_predictions(loc_model, edge_model_with_contact, edge_model_without_contact):
     folders = glob.glob(files_loc + 'stage1_test/*/')
     random.shuffle(folders)
-
     output_dicts = []
-
-    inputs = []
 
     for folder in folders:
         image_location = glob.glob(folder + 'images/*')[0]
@@ -1005,15 +778,8 @@ def run_predictions(loc_model, edge_model_with_contact, edge_model_without_conta
         np_image = np_image.reshape(start_image.size[1], start_image.size[0])
 
         np_image = normalize_image(np_image)
-
-        inputs.append((loc_model, edge_model_with_contact,
-                                           edge_model_without_contact, np_image, image_id))
-
-    p = multiprocessing.Pool(processes=multiprocessing.cpu_count())
-    output_dicts = functools.reduce(operator.concat, p.map(predict_image2,inputs))
-    # output = predict_image2(loc_model, edge_model_with_contact,
-    #                                        edge_model_without_contact, np_image, image_id)
-    #     output_dicts.extend(output)
+        output, _, _, _, _ = predict_image(loc_model, edge_model_with_contact, edge_model_without_contact, np_image, image_id)
+        output_dicts.extend(output)
 
     df = pd.DataFrame.from_dict(output_dicts)
     df = df[['ImageId', 'EncodedPixels']]
@@ -1021,10 +787,10 @@ def run_predictions(loc_model, edge_model_with_contact, edge_model_without_conta
 
 
 def main():
-    edge_model_with_contact = get_edge_model_with_contact()
-    edge_model_without_contact = get_edge_model_without_contact()
-    #edge_model_without_contact = None
-    loc_model = get_loc_model()
+    # edge_model_with_contact = get_edge_model_with_contact()
+    # edge_model_without_contact = get_edge_model_without_contact()
+    # #edge_model_without_contact = None
+    loc_model = get_model('loc')
     print('loc model loaded')
 
     print('edge model loaded')
