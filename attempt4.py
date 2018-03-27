@@ -550,11 +550,8 @@ def point_to_cluster_classification_model_features(t):
 def train_cluster_model(clusters, v_locations):
     x = []
     y = []
-
     current_points = functools.reduce(operator.or_, [i for _, i in clusters.items()])
     points_to_predict = set(v_locations) - current_points
-
-    #print('classifying unclustered pixels:', len(points_to_predict), len(current_points))
 
     for i in clusters.keys():
 
@@ -570,18 +567,11 @@ def train_cluster_model(clusters, v_locations):
     y = np.array(y)
     y = np.ravel(y)
 
-    #x1,x2,y1,y2 = train_test_split(x, y, shuffle=True)
-
     pred_x = []
     for i in points_to_predict:
         pred_x.append(np.array(point_to_cluster_classification_model_features(i)))
     pred_x = np.array(pred_x)
-
     clf = ExtraTreesClassifier()
-
-    # clf.fit(x1, y1)
-    # print(clf.score(x2,y2))
-
     clf.fit(x, y)
 
     if min(pred_x.shape) > 0:
