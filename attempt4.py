@@ -10,7 +10,8 @@ import scipy.misc
 import traceback
 import multiprocessing
 from scipy.ndimage import gaussian_gradient_magnitude, morphology
-from scipy.ndimage.morphology import binary_opening
+from scipy.ndimage.morphology import binary_opening, binary_closing
+from scipy import ndimage
 from keras import optimizers
 import tensorflow as tf
 from keras.models import Model, load_model
@@ -168,10 +169,12 @@ def get_cnn():
 #Section: Generate training sets
 def generate_input_image_and_masks():
     folders = glob.glob(files_loc + 'stage1_train/*/')
+    folders = glob.glob(files_loc + 'extra_data_processed/*/')
     random.shuffle(folders)
     #for count, folder in enumerate(folders):
     while True:
         folder = random.choice(folders)
+        print(folder)
         try:
             image_location = glob.glob(folder + 'images/*')[0]
             mask_locations = glob.glob(folder + 'masks/*')
@@ -315,6 +318,8 @@ def generate_inputs(data_type, batch_size):
             dfs = [concat_df]
 
 def get_model(data_type, retraining_epochs = 20):
+    print(data_type)
+    print(files_loc + 'cnn_{0}.h5'.format(data_type))
     try:
         model = load_model(files_loc + 'cnn_{0}.h5'.format(data_type), custom_objects={'IOU_calc_loss':IOU_calc_loss})
     except:
@@ -326,7 +331,7 @@ def get_model(data_type, retraining_epochs = 20):
                             steps_per_epoch=1000,
                             epochs=retraining_epochs)
 
-        model.save(files_loc + 'cnn_{0}.h5'.format(data_type))
+        #model.save(files_loc + 'cnn_{0}.h5'.format(data_type))
     return model
 
 
@@ -663,6 +668,23 @@ def split_clusters(clusters, edges1, edges2, np_image, image_id):
     print('split {0} clusters into {1}'.format(len(clusters.keys()), len(adj_clusters.keys())))
     return adj_clusters
 
+#fill holes if hole not part of other nuclei
+def fill_holes(clusters, np_image):
+    output_clusters = dict()
+    output_image = locations_to_np_array([], np_image)
+    for k, c in clusters.items():
+        c_image = locations_to_np_array(c, np_image)
+        c_image = ndimage.binary_fill_holes(c_image)
+        output_image = np.add(output_image, c_image)
+
+        if np.max(output_image) > 1:
+            output_image = np.subtract(output_image, c_image)
+            output_clusters[k] = c
+        else:
+            output_clusters[k] = set(prediction_image_to_location_list(c_image))
+    return output_clusters
+
+
 
 def get_outputs(input_dict):
     output, edges_with_contact, edges_without_contact, np_image, image_id = input_dict['output_n'], input_dict['edges_with_contact'], input_dict['edges_without_contact'], input_dict['np_image'], input_dict['image_id']
@@ -679,6 +701,7 @@ def get_outputs(input_dict):
             break
         else:
             clusters = clusters_split
+    clusters = fill_holes(clusters, np_image)
     clusters = train_cluster_model(clusters, v_locations)
     formated_output = to_output_format(clusters, np_image, image_id)
     return formated_output, clusters
@@ -694,7 +717,7 @@ def predict_subimages(input_image, gradient, transpose, rotation, model):
 
     x_index = 0
     outputs = []
-    step_size = 32
+    step_size = 16
 
     input_list = []
     input_map = {}
@@ -790,8 +813,7 @@ def run_predictions(loc_model, edge_model_with_contact, edge_model_without_conta
         image_location = glob.glob(folder + 'images/*')[0]
         start_image = Image.open(image_location).convert('LA')
         image_id = os.path.basename(image_location).split('.')[0]
-        if len(image_id) < 5:
-            print('here')
+
         np_image = np.array(start_image.getdata())[:, 0]
         np_image = np_image.reshape(start_image.size[1], start_image.size[0])
 
