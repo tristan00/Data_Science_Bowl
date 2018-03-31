@@ -555,8 +555,19 @@ def point_to_cluster_classification_model_features(t):
 def train_cluster_model(clusters, v_locations):
     x = []
     y = []
+
+    duplicate_points = set()
+    claimed_points = set()
+    for i in clusters.keys():
+        duplicate_points.update(claimed_points & clusters[i])
+        claimed_points.update(clusters[i])
+
+    for i in clusters.keys():
+        clusters[i] = clusters[i] - duplicate_points
+
     current_points = functools.reduce(operator.or_, [i for _, i in clusters.items()])
-    points_to_predict = set(v_locations) - current_points
+    points_to_predict = set(v_locations) | duplicate_points
+    points_to_predict = points_to_predict - current_points
 
     for i in clusters.keys():
 
@@ -717,7 +728,7 @@ def predict_subimages(input_image, gradient, transpose, rotation, model):
 
     x_index = 0
     outputs = []
-    step_size = 16
+    step_size = 32
 
     input_list = []
     input_map = {}
