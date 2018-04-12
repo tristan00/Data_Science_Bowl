@@ -10,8 +10,7 @@ import scipy.misc
 import traceback
 import multiprocessing
 from scipy.ndimage import gaussian_gradient_magnitude, morphology
-from scipy.ndimage.morphology import binary_opening, binary_closing
-from scipy import ndimage
+from scipy.ndimage.morphology import binary_opening
 from keras import optimizers
 import tensorflow as tf
 from keras.models import Model, load_model
@@ -32,9 +31,10 @@ import configparser
 from sklearn import preprocessing
 import ast
 import pickle
-from sklearn.preprocessing import StandardScaler, MinMaxScaler, Normalizer, QuantileTransformer
+from sklearn.preprocessing import StandardScaler, MinMaxScaler, Normalizer, QuantileTransformer, RobustScaler
 import shutil
 import gc
+from scipy import ndimage
 
 config = configparser.ConfigParser()
 config.read('properties.ini')
@@ -71,33 +71,26 @@ def IOU_calc_loss(y_true, y_pred):
     return -IOU_calc(y_true, y_pred)
 
 
-def normalize_image(np_image):
+def normalize_image(np_image, scheme = 0):
 
     flat_image = np_image.flatten()
     if np.median(flat_image) > 128:
         flip_f = np.vectorize(lambda t: 255-t)
         flat_image = flip_f(flat_image)
     flat_image = np.reshape(flat_image, (-1, 1))
+    if scheme == 0:
+        scaler2 = MinMaxScaler(feature_range=(0, 255))
+        flat_image = scaler2.fit_transform(flat_image)
 
-    scaler2 = MinMaxScaler(feature_range=(0, 255))
-    flat_image = scaler2.fit_transform(flat_image)
-
-    # scaler1 = QuantileTransformer(n_quantiles= 25)
-    # flat_image = scaler1.fit_transform(flat_image)
-    #
-    # scaler3 = MinMaxScaler(feature_range=(0, 255))
-    # flat_image = scaler3.fit_transform(flat_image)
-
-
-
-    flat_image = np.rint(flat_image)
+        flat_image = np.rint(flat_image)
+    elif scheme == 1:
+        scaler2 = RobustScaler()
+        flat_image = scaler2.fit_transform(flat_image)
+        scaler2 = MinMaxScaler(feature_range=(0, 255))
+        flat_image = scaler2.fit_transform(flat_image)
 
     np_image_2 = np.reshape(flat_image, (np_image.shape[0], np_image.shape[1]))
 
-    # scipy.misc.imsave('location_image_1.jpg', np_image)
-    # scipy.misc.imsave('location_image_2.jpg', np_image_2)
-
-    # np_image_scaled = np_image
 
     return np_image_2
 
@@ -159,7 +152,7 @@ def get_cnn():
 
     model = Model(inputs=[inputs], outputs=[outputs])
     #model.compile(optimizer='adam', loss='binary_crossentropy', metrics=[mean_iou])
-    adam = optimizers.Adam(lr=.0001, decay=1e-6)
+    adam = optimizers.Adam(lr=.0001, decay=1e-5)
     model.compile(optimizer=adam, loss=IOU_calc_loss, metrics=['acc'])
     return model
 
@@ -168,13 +161,16 @@ def get_cnn():
 
 #Section: Generate training sets
 def generate_input_image_and_masks():
-    folders = glob.glob(files_loc + 'stage1_train/*/')
-    folders = glob.glob(files_loc + 'extra_data_processed/*/')
+    # folders = list(glob.glob(files_loc + 'stage1_train/*/')) + \
+    #           list(glob.glob(files_loc + 'extra_data_processed/*/')) + \
+    #           list(glob.glob(files_loc + 'extra_data2_processed/*/'))
+    folders = list(glob.glob(files_loc + 'stage1_train/*/'))
+
     random.shuffle(folders)
     #for count, folder in enumerate(folders):
     while True:
         folder = random.choice(folders)
-        print(folder)
+        #print(folder)
         try:
             image_location = glob.glob(folder + 'images/*')[0]
             mask_locations = glob.glob(folder + 'masks/*')
@@ -207,37 +203,51 @@ def get_subimages(input_image, gradient, input_mask, transpose = False, rotation
     input_mask = np.rot90(input_mask, rotation)
     input_gradient = np.rot90(gradient, rotation)
 
-
-
     output = []
-    step_size_min = 30
-    step_size_max = 100
+    step_size_min = 5
+    step_size_max = 120
     starting_step_size_min = 0
-    starting_step_size_max = 2
+    starting_step_size_max = 5
     x_index = random.randint(starting_step_size_min, starting_step_size_max)
 
-    while x_index + full_image_read_size[0] <= input_image.shape[0]:
-        y_index = random.randint(starting_step_size_min, starting_step_size_max)
-        while y_index + full_image_read_size[1] <= input_image.shape[1]:
-            x1 = x_index
-            x2 = x_index + full_image_read_size[0]
-            y1 = y_index
-            y2 = y_index + full_image_read_size[1]
+    max_samples = 10 * int((input_image.shape[0] * input_image.shape[1])/(full_image_read_size[0] * full_image_read_size[1]))
+    #print(max_samples)
 
-            if np.mean(input_mask[x1:x2, y1:y2]) > 0:
-                next_input = {'input': np.dstack((np.expand_dims(input_image[x1:x2, y1:y2], axis=2),
-                                                  np.expand_dims(input_gradient[x1:x2, y1:y2], axis=2))),
-                              'output': np.expand_dims(input_mask[x1:x2, y1:y2], axis=2)}
-                output.append(next_input)
+    for _ in range(max_samples):
+        x1 = random.randint(0, input_image.shape[0] - full_image_read_size[0])
+        x2 = x1 + full_image_read_size[0]
+        y1 = random.randint(0, input_image.shape[1] - full_image_read_size[1])
+        y2 = y1 + full_image_read_size[1]
+        if np.mean(input_mask[x1:x2, y1:y2]) > 0:
+            next_input = {'input': np.dstack((np.expand_dims(input_image[x1:x2, y1:y2], axis=2),
+                                              np.expand_dims(input_gradient[x1:x2, y1:y2], axis=2))),
+                          'output': np.expand_dims(input_mask[x1:x2, y1:y2], axis=2)}
+            output.append(next_input)
 
-            y_index += random.randint(step_size_min,step_size_max)
-        x_index += random.randint(step_size_min,step_size_max)
+    # while x_index + full_image_read_size[0] <= input_image.shape[0]:
+    #     y_index = random.randint(starting_step_size_min, starting_step_size_max)
+    #     while y_index + full_image_read_size[1] <= input_image.shape[1]:
+    #         x1 = x_index
+    #         x2 = x_index + full_image_read_size[0]
+    #         y1 = y_index
+    #         y2 = y_index + full_image_read_size[1]
+    #
+    #         if np.mean(input_mask[x1:x2, y1:y2]) > 0:
+    #             next_input = {'input': np.dstack((np.expand_dims(input_image[x1:x2, y1:y2], axis=2),
+    #                                               np.expand_dims(input_gradient[x1:x2, y1:y2], axis=2))),
+    #                           'output': np.expand_dims(input_mask[x1:x2, y1:y2], axis=2)}
+    #             output.append(next_input)
+    #
+    #         y_index += random.randint(step_size_min,step_size_max)
+    #     x_index += random.randint(step_size_min,step_size_max)
 
     return output
 
 def get_image_arrays(input_tuple):
     input_image, masks, data_type = input_tuple
-    input_image = normalize_image(input_image)
+
+    preprocessing_choice = random.randint(0,1)
+    input_image = normalize_image(input_image, scheme = random.randint(0,1))
     gradient = gaussian_gradient_magnitude(input_image, sigma=.4)
     # print(input_image.shape)
 
@@ -256,6 +266,22 @@ def get_image_arrays(input_tuple):
 
         mask_sum = mask_sum > 1
         mask_sum = mask_sum.astype(int)
+    elif data_type == 'binary_touching_edges':
+        mask_sum = input_image.copy()
+        mask_sum[:] = 0
+
+        for m in masks:
+            temp_edge = gaussian_gradient_magnitude(m, sigma=.4)
+            temp_edge = temp_edge > 0
+            mask_sum = np.add(temp_edge.astype(int), mask_sum)
+
+        input_image = mask_sum > 0
+        input_image = input_image.astype(int)
+        gradient = gaussian_gradient_magnitude(input_image, sigma=.4)
+        mask_sum = mask_sum > 1
+        mask_sum = mask_sum.astype(int)
+
+
     else:
         mask_sum = functools.reduce(operator.add, masks)
         mask_sum = mask_sum > 0
@@ -298,13 +324,14 @@ def generate_inputs(data_type, batch_size):
         while concat_df.shape[0] < (batch_size * 5):
             try:
                 image, mask = next(gen)
+                dfs.append(get_image_arrays((image, mask, data_type)))
+                concat_df = pd.concat(dfs)
+                dfs = [concat_df]
             except:
                 gen = generate_input_image_and_masks()
                 traceback.print_exc()
                 continue
-            dfs.append(get_image_arrays((image, mask, data_type)))
-            concat_df = pd.concat(dfs)
-            dfs = [concat_df]
+
 
         if concat_df.shape[0] == 0:
             continue
@@ -317,21 +344,19 @@ def generate_inputs(data_type, batch_size):
             concat_df = concat_df[batch_size:]
             dfs = [concat_df]
 
-def get_model(data_type, retraining_epochs = 20):
-    print(data_type)
-    print(files_loc + 'cnn_{0}.h5'.format(data_type))
+def get_model(data_type, retraining_epochs = 4):
     try:
         model = load_model(files_loc + 'cnn_{0}.h5'.format(data_type), custom_objects={'IOU_calc_loss':IOU_calc_loss})
     except:
         traceback.print_exc()
         model = get_cnn()
     if retraining_epochs > 0:
-        gen = generate_inputs(data_type, 32)
+        gen = generate_inputs(data_type, 128)
         model.fit_generator(generator=gen,
                             steps_per_epoch=1000,
                             epochs=retraining_epochs)
 
-        #model.save(files_loc + 'cnn_{0}.h5'.format(data_type))
+        model.save(files_loc + 'cnn_{0}.h5'.format(data_type))
     return model
 
 
@@ -556,18 +581,10 @@ def train_cluster_model(clusters, v_locations):
     x = []
     y = []
 
-    duplicate_points = set()
-    claimed_points = set()
-    for i in clusters.keys():
-        duplicate_points.update(claimed_points & clusters[i])
-        claimed_points.update(clusters[i])
-
-    for i in clusters.keys():
-        clusters[i] = clusters[i] - duplicate_points
-
     current_points = functools.reduce(operator.or_, [i for _, i in clusters.items()])
-    points_to_predict = set(v_locations) | duplicate_points
-    points_to_predict = points_to_predict - current_points
+    points_to_predict = set(v_locations) - current_points
+
+    print('classifying unclustered pixels:', len(points_to_predict), len(current_points))
 
     for i in clusters.keys():
 
@@ -583,18 +600,25 @@ def train_cluster_model(clusters, v_locations):
     y = np.array(y)
     y = np.ravel(y)
 
+    #x1,x2,y1,y2 = train_test_split(x, y, shuffle=True)
+
     pred_x = []
     for i in points_to_predict:
         pred_x.append(np.array(point_to_cluster_classification_model_features(i)))
     pred_x = np.array(pred_x)
-    clf = ExtraTreesClassifier()
-    clf.fit(x, y)
 
-    if min(pred_x.shape) > 0:
+    clf = ExtraTreesClassifier(n_jobs=-1)
+
+    # clf.fit(x1, y1)
+    # print(clf.score(x2,y2))
+
+    clf.fit(x, y)
+    if min(pred_x.shape) > 0 :
         predictions = clf.predict(pred_x)
         for i, j in zip(points_to_predict, predictions):
             clusters[j].add(i)
             current_points.add(i)
+
 
     return clusters
 
@@ -607,25 +631,31 @@ def locations_to_np_array(locations, np_image):
     return np_image
 
 
-def split_clusters(clusters, edges1, edges2, np_image, image_id):
+def split_clusters(clusters, edges1, edges2, edges3, np_image, image_id):
 
     adj_cluster_list = []
 
     #scaling for size, very arbitrary at the moment
-    average_cluster_size = sum([len(i) for _, i in clusters.items()])/len(clusters.keys())
+    if len(clusters.keys()) > 0:
+        average_cluster_size = sum([len(i) for _, i in clusters.items()])/len(clusters.keys())
+    else:
+        clusters[0] = [(0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (1, 2), (2, 0), (2, 1), (2, 2)]
+        return clusters
     if average_cluster_size>1000:
         opening_split_size = 3
     elif average_cluster_size>500:
         opening_split_size = 2
     else:
         opening_split_size = 1
-    #opening_split_size = 1
+    # opening_split_size = 1
 
 
     for _, c in clusters.items():
         try:
-            cluster_sub_edges_locations = c - set(edges1)
+            cluster_sub_edges_locations = c - set(edges3)
             cluster_sub_edges_locations = cluster_sub_edges_locations - set(edges2)
+            #cluster_sub_edges_locations = cluster_sub_edges_locations - set(edges3)
+
             adj_cluster1 = get_nuclei_from_predictions(cluster_sub_edges_locations, image_id)
             cluster1_locations = functools.reduce(operator.or_, [i for _, i in adj_cluster1.items()])
         except:
@@ -696,22 +726,51 @@ def fill_holes(clusters, np_image):
     return output_clusters
 
 
-
 def get_outputs(input_dict):
-    output, edges_with_contact, edges_without_contact, np_image, image_id = input_dict['output_n'], input_dict['edges_with_contact'], input_dict['edges_without_contact'], input_dict['np_image'], input_dict['image_id']
+    output, bin_edge_with_contact, edges_with_contact, edges_without_contact, np_image, image_id, bin_edge_model_with_contact = input_dict['output_n'],input_dict['bin_edge_with_contact'], \
+                                                                                                   input_dict['edges_with_contact'], input_dict['edges_without_contact'], \
+                                                                                                   input_dict['np_image'], input_dict['image_id'], input_dict['bin_edge_model_with_contact']
 
     v_locations = prediction_image_to_location_list(output)
     v_locations = get_valid_pixels(v_locations)
+    bin_edge_with_contact_locations =  prediction_image_to_location_list(bin_edge_with_contact)
     edge_with_contact_locations = prediction_image_to_location_list(edges_with_contact)
     edge_without_contact_locations = prediction_image_to_location_list(edges_without_contact)
     clusters = get_nuclei_from_predictions(v_locations, image_id)
 
     while True:
-        clusters_split = split_clusters(clusters, edge_with_contact_locations, edge_without_contact_locations, np_image, image_id)
+        clusters_split = split_clusters(clusters, bin_edge_with_contact_locations, edge_with_contact_locations, edge_without_contact_locations, np_image, image_id)
         if len(clusters.keys()) == len(clusters_split.keys()):
             break
         else:
             clusters = clusters_split
+
+    prediction_f = np.vectorize(lambda t: 1 if t > confidence_threshold else 0)
+
+    combined_image = locations_to_np_array(functools.reduce(operator.or_, [i for _, i in clusters.items()]) , np_image)
+    bin_gradient = gaussian_gradient_magnitude(combined_image, sigma=.4)
+    bin_edge_with_contact = []
+    bin_edge_with_contact.extend(
+        predict_subimages(combined_image, bin_gradient, False, 0, bin_edge_model_with_contact))
+    bin_edge_with_contact.extend(
+        predict_subimages(combined_image, bin_gradient, False, 1, bin_edge_model_with_contact))
+    bin_edge_with_contact.extend(
+        predict_subimages(combined_image, bin_gradient, False, 2, bin_edge_model_with_contact))
+    bin_edge_with_contact.extend(
+        predict_subimages(combined_image, bin_gradient, False, 3, bin_edge_model_with_contact))
+    bin_edge_with_contact = np.dstack(bin_edge_with_contact)
+    bin_edge_with_contact = np.nanmean(bin_edge_with_contact, 2)
+    bin_edge_with_contact = prediction_f(bin_edge_with_contact)
+
+    bin_edge_with_contact_locations = set(bin_edge_with_contact_locations) | set(prediction_image_to_location_list(bin_edge_with_contact))
+
+    while True:
+        clusters_split = split_clusters(clusters, bin_edge_with_contact_locations, edge_with_contact_locations, edge_without_contact_locations, np_image, image_id)
+        if len(clusters.keys()) == len(clusters_split.keys()):
+            break
+        else:
+            clusters = clusters_split
+
     clusters = fill_holes(clusters, np_image)
     clusters = train_cluster_model(clusters, v_locations)
     formated_output = to_output_format(clusters, np_image, image_id)
@@ -728,7 +787,7 @@ def predict_subimages(input_image, gradient, transpose, rotation, model):
 
     x_index = 0
     outputs = []
-    step_size = 32
+    step_size = 128
 
     input_list = []
     input_map = {}
@@ -771,7 +830,7 @@ def predict_subimages(input_image, gradient, transpose, rotation, model):
     return outputs
 
 
-def predict_image(loc_model, edge_model_with_contact, edge_model_without_contact, np_image, image_id):
+def predict_image(loc_model, bin_edge_model_with_contact, edge_model_with_contact, edge_model_without_contact, np_image, image_id):
     image_gradient = gaussian_gradient_magnitude(np_image, sigma=.4)
     results = []
     results.extend(predict_subimages(np_image, image_gradient, False, 0, loc_model))
@@ -785,7 +844,6 @@ def predict_image(loc_model, edge_model_with_contact, edge_model_without_contact
 
     prediction_f = np.vectorize(lambda t: 1 if t > confidence_threshold else 0)
     nuclie_predictions = prediction_f(result_mean)
-
     edges_with_contact = []
     edges_with_contact.extend(predict_subimages(np_image, image_gradient, False, 0, edge_model_with_contact))
     edges_with_contact.extend(predict_subimages(np_image, image_gradient, False, 1, edge_model_with_contact))
@@ -799,53 +857,65 @@ def predict_image(loc_model, edge_model_with_contact, edge_model_without_contact
     edges_without_contact.extend(predict_subimages(np_image, image_gradient, False, 2, edge_model_without_contact))
     edges_without_contact.extend(predict_subimages(np_image, image_gradient, False, 3, edge_model_without_contact))
     edge_array_without_contact = np.dstack(edges_with_contact)
-
     edge_mean_with_contact = np.nanmean(edge_array_with_contact, 2)
     edge_predictions_with_contact = prediction_f(edge_mean_with_contact)
-
     edge_mean_without_contact = np.nanmean(edge_array_without_contact, 2)
     edge_predictions_without_contact = prediction_f(edge_mean_without_contact)
-    # edge_predictions_without_contact =np_image.copy()
-    # edge_predictions_without_contact[:] = 0
 
-    input_dict = {'output_n':nuclie_predictions, 'edges_with_contact': edge_predictions_with_contact, 'edges_without_contact': edge_predictions_without_contact, 'image_id':image_id, 'np_image':np_image}
+    bin_model_input = np.subtract(nuclie_predictions, np.add(edge_predictions_with_contact, edge_predictions_without_contact))
+    bin_model_input = (bin_model_input > 0).astype(int)
+    bin_model_input = binary_opening(bin_model_input, iterations=1)
+    bin_gradient = gaussian_gradient_magnitude(bin_model_input, sigma=.4)
+
+    bin_edge_with_contact = []
+    bin_edge_with_contact.extend(predict_subimages(bin_model_input, bin_gradient, False, 0, bin_edge_model_with_contact))
+    bin_edge_with_contact.extend(predict_subimages(bin_model_input, bin_gradient, False, 1, bin_edge_model_with_contact))
+    bin_edge_with_contact.extend(predict_subimages(bin_model_input, bin_gradient, False, 2, bin_edge_model_with_contact))
+    bin_edge_with_contact.extend(predict_subimages(bin_model_input, bin_gradient, False, 3, bin_edge_model_with_contact))
+    bin_edge_with_contact = np.dstack(bin_edge_with_contact)
+    bin_edge_with_contact = np.nanmean(bin_edge_with_contact, 2)
+    bin_edge_with_contact = prediction_f(bin_edge_with_contact)
+
+    input_dict = {'output_n':nuclie_predictions, 'edges_with_contact': edge_predictions_with_contact, 'bin_edge_with_contact':bin_edge_with_contact,
+                  'edges_without_contact': edge_predictions_without_contact, 'image_id':image_id, 'np_image':np_image, 'bin_edge_model_with_contact':bin_edge_model_with_contact}
 
     output_dicts, clusters = get_outputs(input_dict)
     #output_dicts.extend()
     return output_dicts, clusters, nuclie_predictions, edge_predictions_with_contact, edge_predictions_without_contact
 
 
-def run_predictions(loc_model, edge_model_with_contact, edge_model_without_contact):
-    folders = glob.glob(files_loc + 'stage1_test/*/')
+def run_predictions(loc_model, bin_edge_model_with_contact, edge_model_with_contact, edge_model_without_contact):
+    folders = glob.glob(files_loc + 'stage2_test/*/')
     random.shuffle(folders)
     output_dicts = []
 
-    for folder in folders:
+    for count, folder in enumerate(folders):
         image_location = glob.glob(folder + 'images/*')[0]
         start_image = Image.open(image_location).convert('LA')
         image_id = os.path.basename(image_location).split('.')[0]
-
+        print(count, len(folders))
         np_image = np.array(start_image.getdata())[:, 0]
         np_image = np_image.reshape(start_image.size[1], start_image.size[0])
 
         np_image = normalize_image(np_image)
-        output, _, _, _, _ = predict_image(loc_model, edge_model_with_contact, edge_model_without_contact, np_image, image_id)
+        output, _, _, _, _ = predict_image(loc_model, bin_edge_model_with_contact, edge_model_with_contact, edge_model_without_contact, np_image, image_id)
         output_dicts.extend(output)
 
     df = pd.DataFrame.from_dict(output_dicts)
     df = df[['ImageId', 'EncodedPixels']]
-    df.to_csv('output2.csv', index = False)
+    df.to_csv('output.csv', index = False)
 
 
 def main():
     loc_model = get_model('loc', retraining_epochs=0)
+    bin_edge_model_with_contact = get_model('binary_touching_edges', retraining_epochs=0)
     edge_model_with_contact = get_model('touching_edges', retraining_epochs=0)
     edge_model_without_contact = get_model('non_touching_edges', retraining_epochs=0)
     print('loc model loaded')
 
     print('edge model loaded')
     #run_tests(loc_model, edge_model_with_contact, edge_model_without_contact)
-    run_predictions(loc_model, edge_model_with_contact, edge_model_without_contact)
+    run_predictions(loc_model, bin_edge_model_with_contact, edge_model_with_contact, edge_model_without_contact)
 
 
 if __name__ == '__main__':
